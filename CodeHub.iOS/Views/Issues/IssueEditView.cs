@@ -1,96 +1,87 @@
 using System;
 using System.Linq;
-using MonoTouch.UIKit;
+using CodeHub.iOS.ViewControllers;
+using UIKit;
 using CodeHub.Core.ViewModels.Issues;
-using ReactiveUI;
-using Xamarin.Utilities.Core.Services;
-using Xamarin.Utilities.ViewControllers;
-using Xamarin.Utilities.DialogElements;
+using CodeHub.iOS.Utilities;
+using CodeHub.iOS.DialogElements;
 
 namespace CodeHub.iOS.Views.Issues
 {
-    public class IssueEditView : ViewModelDialogViewController<IssueEditViewModel>
+    public class IssueEditView : ViewModelDrivenDialogViewController
     {
-        private readonly IStatusIndicatorService _statusIndicatorService;
-
-        public IssueEditView(IStatusIndicatorService statusIndicatorService)
+        public IssueEditView()
         {
-            _statusIndicatorService = statusIndicatorService;
+            Title = "Edit Issue";
         }
 
         public override void ViewDidLoad()
         {
-            Title = "Edit Issue";
-
             base.ViewDidLoad();
 
-            NavigationItem.RightBarButtonItem = new UIBarButtonItem(Theme.CurrentTheme.SaveButton, UIBarButtonItemStyle.Plain, (s, e) => {
-                View.EndEditing(true);
-                ViewModel.SaveCommand.ExecuteIfCan();
-            });
-            NavigationItem.RightBarButtonItem.EnableIfExecutable(ViewModel.SaveCommand.CanExecuteObservable);
+            TableView.RowHeight = UITableView.AutomaticDimension;
+            TableView.EstimatedRowHeight = 44f;
 
-            var title = new InputElement("Title", string.Empty, string.Empty);
-            title.Changed += (sender, e) => ViewModel.Title = title.Value;
+            var vm = (IssueEditViewModel)ViewModel;
 
-            var assignedTo = new StyledStringElement("Responsible", "Unassigned", UITableViewCellStyle.Value1);
-            assignedTo.Accessory = UITableViewCellAccessory.DisclosureIndicator;
-            assignedTo.Tapped += () => ViewModel.GoToAssigneeCommand.Execute(null);
+            var saveButton = new UIBarButtonItem(UIBarButtonSystemItem.Save);
+            NavigationItem.RightBarButtonItem = saveButton;
 
-            var milestone = new StyledStringElement("Milestone", "None", UITableViewCellStyle.Value1);
-            milestone.Accessory = UITableViewCellAccessory.DisclosureIndicator;
-            milestone.Tapped += () => ViewModel.GoToMilestonesCommand.Execute(null);
-
-            var labels = new StyledStringElement("Labels", "None", UITableViewCellStyle.Value1);
-            labels.Accessory = UITableViewCellAccessory.DisclosureIndicator;
-            labels.Tapped += () => ViewModel.GoToLabelsCommand.Execute(null);
-
+            var title = new EntryElement("Title", string.Empty, string.Empty);
+            var assignedTo = new StringElement("Responsible", "Unassigned", UITableViewCellStyle.Value1);
+            var milestone = new StringElement("Milestone", "None", UITableViewCellStyle.Value1);
+            var labels = new StringElement("Labels", "None", UITableViewCellStyle.Value1);
             var content = new MultilinedElement("Description");
-            content.Tapped += () => ViewModel.GoToDescriptionCommand.ExecuteIfCan();
-
             var state = new BooleanElement("Open", true);
-            state.ValueChanged += (sender, e) => ViewModel.IsOpen = state.Value;
-
-            ViewModel.WhenAnyValue(x => x.Issue.Title).Subscribe(x => title.Value = x);
-            ViewModel.WhenAnyValue(x => x.Content).Subscribe(x => content.Value = x);
-
-            ViewModel.WhenAnyValue(x => x.AssignedTo).Subscribe(x => {
-                assignedTo.Value = x == null ? "Unassigned" : x.Login;
-                if (assignedTo.GetRootElement() != null)
-                    Root.Reload(assignedTo, UITableViewRowAnimation.None);
-            });
-
-            ViewModel.WhenAnyValue(x => x.Milestone).Subscribe(x => {
-                milestone.Value = x == null ? "None" : x.Title;
-                if (assignedTo.GetRootElement() != null)
-                    Root.Reload(milestone, UITableViewRowAnimation.None);
-            });
-
-            ViewModel.WhenAnyValue(x => x.Labels).Subscribe(x =>
-            {
-                labels.Value = (ViewModel.Labels == null && ViewModel.Labels.Length == 0) ? 
-                                "None" : string.Join(", ", ViewModel.Labels.Select(i => i.Name));
-
-                if (assignedTo.GetRootElement() != null)
-                    Root.Reload(labels, UITableViewRowAnimation.None);
-            });
-
-            ViewModel.WhenAnyValue(x => x.IsOpen).Subscribe(x =>
-            {
-                state.Value = x;
-                if (assignedTo.GetRootElement() != null)
-                    Root.Reload(state, UITableViewRowAnimation.None);
-            });
-
-            ViewModel.SaveCommand.IsExecuting.Subscribe(x =>
-            {
-                if (x)
-                    _statusIndicatorService.Show("Updating...");
-                else
-                    _statusIndicatorService.Hide();
-            });
 
             Root.Reset(new Section { title, assignedTo, milestone, labels }, new Section { state }, new Section { content });
+
+            OnActivation(d =>
+            {
+                d(vm.Bind(x => x.IssueTitle, true).Subscribe(x => title.Value = x));
+                d(title.Changed.Subscribe(x => vm.IssueTitle = x));
+
+                d(assignedTo.Clicked.BindCommand(vm.GoToAssigneeCommand));
+                d(milestone.Clicked.BindCommand(vm.GoToMilestonesCommand));
+                d(labels.Clicked.BindCommand(vm.GoToLabelsCommand));
+
+                d(vm.Bind(x => x.IsOpen, true).Subscribe(x => state.Value = x));
+                d(vm.Bind(x => x.IsSaving).SubscribeStatus("Updating..."));
+
+                d(state.Changed.Subscribe(x => vm.IsOpen = x));
+                d(vm.Bind(x => x.Content, true).Subscribe(x => content.Details = x));
+
+                d(vm.Bind(x => x.AssignedTo, true).Subscribe(x => {
+                    assignedTo.Value = x == null ? "Unassigned" : x.Login;
+                }));
+
+                d(vm.Bind(x => x.Milestone, true).Subscribe(x => {
+                    milestone.Value = x == null ? "None" : x.Title;
+                }));
+
+                d(vm.BindCollection(x => x.Labels, true).Subscribe(x => {
+                    labels.Value = vm.Labels.Items.Count == 0 ? "None" : string.Join(", ", vm.Labels.Items.Select(i => i.Name));
+                }));
+
+                d(saveButton.GetClickedObservable().Subscribe(_ => {
+                    View.EndEditing(true);
+                    vm.SaveCommand.Execute(null);
+                }));
+
+                d(content.Clicked.Subscribe(_ => {
+                    var composer = new MarkdownComposerViewController
+                    {
+                        Title = "Issue Description",
+                        Text = content.Details
+                    };
+
+                    composer.PresentAsModal(this, text =>
+                    {
+                        vm.Content = text;
+                        this.DismissViewController(true, null);
+                    });
+                }));
+            });
         }
     }
 }

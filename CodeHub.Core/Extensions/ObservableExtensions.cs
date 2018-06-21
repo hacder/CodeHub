@@ -1,20 +1,21 @@
-﻿using System;
-using ReactiveUI;
-
-namespace System.Reactive.Linq
+﻿// Analysis disable once CheckNamespace
+namespace System
 {
+    using System;
+    using System.Windows.Input;
+    using System.Reactive.Disposables;
+    using System.Reactive.Linq;
+
     public static class ObservableExtensions
     {
-        public static IObservable<T> IsNotNull<T>(this IObservable<T> @this) where T : class
+        public static IDisposable BindCommand<T>(this IObservable<T> @this, ICommand command)
         {
-            return @this.Where(x => x != null);
+            return command == null ? Disposable.Empty : @this.Where(x => command.CanExecute(x)).Subscribe(x => command.Execute(x));
         }
 
-        public static IObservable<TRet> WhenViewModel<TViewModel, TRet>(this IViewFor<TViewModel> @this, 
-            System.Linq.Expressions.Expression<Func<TViewModel, TRet>> @select) where TViewModel : class
+        public static IDisposable SubscribeError<T>(this IObservable<T> @this, Action<Exception> onError)
         {
-            return @this.WhenAnyValue(x => x.ViewModel).Where(x => x != null).Select(x => x.WhenAnyValue(@select)).Switch();
+            return @this.Subscribe(_ => { }, onError);
         }
     }
 }
-

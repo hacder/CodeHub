@@ -1,71 +1,70 @@
 using System;
+using System.Threading.Tasks;
+using CodeHub.Core.Messages;
 using CodeHub.Core.Services;
-using GitHubSharp.Models;
-using ReactiveUI;
-using Xamarin.Utilities.Core.ViewModels;
+using MvvmCross.Core.ViewModels;
 
 namespace CodeHub.Core.ViewModels.Source
 {
-    public class EditSourceViewModel : BaseViewModel, ILoadableViewModel
+    public class EditSourceViewModel : LoadableViewModel
     {
-		private string _text;
-		public string Text
-		{
-			get { return _text; }
-			private set { this.RaiseAndSetIfChanged(ref _text, value); }
-		}
+        private readonly IMessageService _messageService;
 
-	    private ContentUpdateModel _content;
-	    public ContentUpdateModel Content
-	    {
-	        get { return _content; }
-	        private set { this.RaiseAndSetIfChanged(ref _content, value); }
-	    }
+        private string _text;
+        public string Text
+        {
+            get { return _text; }
+            private set { this.RaiseAndSetIfChanged(ref _text, value); }
+        }
 
-		public string Username { get; set; }
+        public string Username { get; private set; }
 
-		public string Repository { get; set; }
+        public string Repository { get; private set; }
 
-		public string Path { get; set; }
+        public string Path { get; private set; }
 
-		public string BlobSha { get; set; }
+        public string BlobSha { get; private set; }
 
-		public string Branch { get; set; }
+        public string Branch { get; private set; }
 
-        public IReactiveCommand LoadCommand { get; private set; }
+        public EditSourceViewModel(IMessageService messageService = null)
+        {
+            _messageService = messageService ?? GetService<IMessageService>();
+        }
 
-        public IReactiveCommand<object> SaveCommand { get; private set; }
+        public void Init(NavObject navObject)
+        {
+            Username = navObject.Username;
+            Repository = navObject.Repository;
+            Path = navObject.Path ?? string.Empty;
+            Branch = navObject.Branch ?? "master";
 
-	    public EditSourceViewModel(IApplicationService applicationService)
-	    {
-            SaveCommand = ReactiveCommand.Create();
-	        SaveCommand.Subscribe(_ =>
-	        {
-	            var vm = CreateViewModel<CommitMessageViewModel>();
-                vm.Username = Username;
-                vm.Repository = Repository;
-                vm.Path = Path;
-                vm.Text = Text;
-                vm.BlobSha = BlobSha;
-                vm.Branch = Branch;
-                vm.ContentChanged.Subscribe(x => Content = x);
-                ShowViewModel(vm);
-	        });
+            if (!Path.StartsWith("/", StringComparison.Ordinal))
+                Path = "/" + Path;
+        }
 
-            LoadCommand = ReactiveCommand.CreateAsyncTask(async t =>
-	        {
-	            var path = Path;
-                if (!path.StartsWith("/", StringComparison.Ordinal))
-                    path = "/" + path;
+        protected override async Task Load()
+        {
+            var request = this.GetApplication().Client.Users[Username].Repositories[Repository].GetContentFile(Path, Branch);
+            var data = await this.GetApplication().Client.ExecuteAsync(request);
+            BlobSha = data.Data.Sha;
+            Text = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(data.Data.Content));
+        }
 
-	            var request = applicationService.Client.Users[Username].Repositories[Repository].GetContentFile(path, Branch ?? "master");
-			    request.UseCache = false;
-			    var data = await applicationService.Client.ExecuteAsync(request);
-			    BlobSha = data.Data.Sha;
-	            var content = Convert.FromBase64String(data.Data.Content);
-                Text = System.Text.Encoding.UTF8.GetString(content, 0, content.Length);
-	        });
-	    }
+        public async Task Commit(string data, string message)
+        {
+            var request = this.GetApplication().Client.Users[Username].Repositories[Repository].UpdateContentFile(Path, message, data, BlobSha, Branch);
+            var response = await this.GetApplication().Client.ExecuteAsync(request);
+            _messageService.Send(new SourceEditMessage { OldSha = BlobSha, Data = data, Update = response.Data });
+        }
+
+        public class NavObject
+        {
+            public string Username { get; set; }
+            public string Repository { get; set; }
+            public string Path { get; set; }
+            public string Branch { get; set; }
+        }
     }
 }
 

@@ -1,88 +1,107 @@
 using System;
-using CodeFramework.Elements;
-using MonoTouch.UIKit;
+using CodeHub.iOS.ViewControllers;
+using UIKit;
+using CodeHub.iOS.Utilities;
 using System.Linq;
-using MonoTouch.Foundation;
+using Foundation;
 using CodeHub.Core.ViewModels.Changesets;
-using ReactiveUI;
-using System.Reactive.Linq;
-using GitHubSharp.Models;
-using Xamarin.Utilities.ViewControllers;
-using Xamarin.Utilities.DialogElements;
-using System.Reactive;
+using CodeHub.iOS.DialogElements;
+using Humanizer;
+using CodeHub.iOS.Services;
+using CodeHub.iOS.ViewControllers.Repositories;
 using System.Collections.Generic;
-using CodeHub.iOS.WebViews;
+using System.Reactive.Linq;
+using CodeHub.iOS.ViewControllers.Source;
 
 namespace CodeHub.iOS.Views.Source
 {
-    public class ChangesetView : ViewModelPrettyDialogViewController<ChangesetViewModel>
+    public class ChangesetView : PrettyDialogViewController
     {
-        private SplitButtonElement _split;
-        private UIActionSheet _actionSheet;
-        private Section _commentSection = new Section();
+        public new ChangesetViewModel ViewModel
+        {
+            get { return (ChangesetViewModel)base.ViewModel; }
+            set { base.ViewModel = value; }
+        }
 
         public override void ViewDidLoad()
         {
             base.ViewDidLoad();
 
-            NavigationItem.RightBarButtonItem = new UIBarButtonItem(UIBarButtonSystemItem.Action, (s, e) => ShowExtraMenu());
-            NavigationItem.RightBarButtonItem.EnableIfExecutable(ViewModel.WhenAnyValue(x => x.Commit).Select(x => x != null));
+            TableView.RowHeight = UITableView.AutomaticDimension;
+            TableView.EstimatedRowHeight = 44f;
 
-            _split = new SplitButtonElement();
-            var additions = _split.AddButton("Additions", "-");
-            var deletions = _split.AddButton("Deletions", "-");
-            var parents = _split.AddButton("Parents", "-");
+            var actionButton = new UIBarButtonItem(UIBarButtonSystemItem.Action);
 
-            var commentsElement = new WebElement("comments");
-            commentsElement.UrlRequested = ViewModel.GoToUrlCommand.ExecuteIfCan;
-            //commentsSection.Add(commentsElement);
+            HeaderView.SetImage(null, Images.Avatar);
+            HeaderView.Text = Title;
+            TableView.RowHeight = UITableView.AutomaticDimension;
+            TableView.EstimatedRowHeight = 44f;
 
-            var headerSection = new Section(HeaderView) { _split };
-            Root.Reset(headerSection);
-
-            ViewModel.WhenAnyValue(x => x.Commit).IsNotNull().SubscribeSafe(x =>
+            ViewModel.Bind(x => x.Changeset).Subscribe(x =>
             {
-                HeaderView.Image = Images.LoginUserUnknown;
-
-                if (x.Author != null)
-                    HeaderView.ImageUri = x.Author.AvatarUrl;
-
                 var msg = x.Commit.Message ?? string.Empty;
-                var firstLine = msg.IndexOf("\n", StringComparison.Ordinal);
-                HeaderView.Text = firstLine > 0 ? msg.Substring(0, firstLine) : msg;
-
-                HeaderView.SubText = "Commited " + (x.Commit.Committer.Date).ToDaysAgo();
-
-                additions.Text = x.Stats.Additions.ToString();
-                deletions.Text = x.Stats.Deletions.ToString();
-                parents.Text = x.Parents.Count.ToString();
-
-                ReloadData();
+                msg = msg.Split('\n')[0];
+                HeaderView.Text = msg.Split('\n')[0];
+                HeaderView.SubText = "Commited " + (ViewModel.Changeset?.Commit?.Committer?.Date ?? DateTimeOffset.Now).Humanize();
+                HeaderView.SetImage(x.Author?.AvatarUrl, Images.Avatar);
+                RefreshHeaderView();
             });
 
-            ViewModel.WhenAnyValue(x => x.Commit).Where(x => x != null).Subscribe(Render);
+            ViewModel.Bind(x => x.Changeset).Subscribe(_ => Render());
+            ViewModel.BindCollection(x => x.Comments).Subscribe(_ => Render());
+            ViewModel.Bind(x => x.ShouldShowPro).Where(x => x).Subscribe(_ => this.ShowPrivateView());
 
-            ViewModel.Comments.Changed
-                .Select(_ => new Unit())
-                .StartWith(new Unit())
-                .Subscribe(x =>
+            OnActivation(d =>
             {
-                    var commentModels = ViewModel.Comments.Select(c => 
-                        new Comment(c.User.AvatarUrl, c.User.Login, c.BodyHtml, c.CreatedAt.ToDaysAgo()));
-                    var razorView = new CommentsView { Model = commentModels };
-                    var html = razorView.GenerateString();
-                    commentsElement.Value = html;
-
-                    if (commentsElement.GetRootElement() == null && ViewModel.Comments.Count > 0)
-                        _commentSection.Add(commentsElement);
+                d(HeaderView.Clicked.BindCommand(ViewModel.GoToOwner));
+                d(ViewModel.Bind(x => x.Title).Subscribe(x => Title = x));
+                d(actionButton.GetClickedObservable().Subscribe(_ => ShowExtraMenu()));
             });
         }
 
-        public void Render(CommitModel commitModel)
+        private void FileClicked(GitHubSharp.Models.CommitModel.CommitFileModel file)
         {
-            var headerSection = new Section(HeaderView) { _split };
+            if (file.Patch == null)
+            {
+                var viewController = new FileSourceViewController(
+                    ViewModel.User, ViewModel.Repository, file.Filename,
+                    ViewModel.Changeset.Sha, ShaType.Hash);
+
+                this.PushViewController(viewController);
+            }
+            else
+            {
+                var viewController = new CommitDiffViewController(
+                    ViewModel.User, ViewModel.Repository, ViewModel.Changeset.Sha,
+                    file.Filename, file.Patch);
+
+                this.PushViewController(viewController);
+            }
+        }
+
+        public void Render()
+        {
+            var commitModel = ViewModel.Changeset;
+            if (commitModel == null)
+                return;
+
+            var weakReference = new WeakReference<ChangesetView>(this);
+
+            ICollection<Section> sections = new LinkedList<Section>();
+
+            var additions = ViewModel.Changeset.Stats?.Additions ?? 0;
+            var deletions = ViewModel.Changeset.Stats?.Deletions ?? 0;
+
+            var split = new SplitButtonElement();
+            split.AddButton("Additions", additions.ToString());
+            split.AddButton("Deletions", deletions.ToString());
+            split.AddButton("Parents", ViewModel.Changeset.Parents.Count().ToString());
+
+            var headerSection = new Section() { split };
+            sections.Add(headerSection);
+
             var detailSection = new Section();
-            Root.Reset(headerSection, detailSection);
+            sections.Add(detailSection);
 
             var user = "Unknown";
             if (commitModel.Commit.Author != null)
@@ -90,97 +109,148 @@ namespace CodeHub.iOS.Views.Source
             if (commitModel.Commit.Committer != null)
                 user = commitModel.Commit.Committer.Name;
 
-            detailSection.Add(new MultilinedElement(user, commitModel.Commit.Message)
-            {
-                CaptionColor = Theme.CurrentTheme.MainTextColor,
-                ValueColor = Theme.CurrentTheme.MainTextColor,
-                BackgroundColor = UIColor.White
-            });
+            detailSection.Add(new MultilinedElement(user, commitModel.Commit.Message));
 
             if (ViewModel.ShowRepository)
             {
-                var repo = new StyledStringElement(ViewModel.RepositoryName) { 
-                    Accessory = MonoTouch.UIKit.UITableViewCellAccessory.DisclosureIndicator, 
-                    Lines = 1, 
-                    Font = StyledStringElement.DefaultDetailFont, 
-                    TextColor = StyledStringElement.DefaultDetailColor,
-                    Image = Images.Repo
+                var repo = new StringElement(ViewModel.Repository)
+                {
+                    Accessory = UITableViewCellAccessory.DisclosureIndicator,
+                    Lines = 1,
+                    Font = UIFont.PreferredSubheadline,
+                    TextColor = StringElement.DefaultDetailColor,
+                    Image = Octicon.Repo.ToImage()
                 };
-                repo.Tapped += () => ViewModel.GoToRepositoryCommand.Execute(null);
+                repo.Clicked.Subscribe(_ => ViewModel.GoToRepositoryCommand.Execute(null));
                 detailSection.Add(repo);
             }
 
-			var paths = commitModel.Files.GroupBy(y => {
-				var filename = "/" + y.Filename;
-				return filename.Substring(0, filename.LastIndexOf("/", System.StringComparison.Ordinal) + 1);
-			}).OrderBy(y => y.Key);
+            var paths = commitModel.Files.GroupBy(y =>
+            {
+                var filename = "/" + y.Filename;
+                return filename.Substring(0, filename.LastIndexOf("/", System.StringComparison.Ordinal) + 1);
+            }).OrderBy(y => y.Key);
 
-			foreach (var p in paths)
-			{
-				var fileSection = new Section(p.Key);
-				foreach (var x in p)
-				{
-					var y = x;
-					var file = x.Filename.Substring(x.Filename.LastIndexOf('/') + 1);
-					var sse = new ChangesetElement(file, x.Status, x.Additions, x.Deletions);
-					sse.Tapped += () => ViewModel.GoToFileCommand.Execute(y);
-					fileSection.Add(sse);
-				}
-				Root.Add(fileSection);
-			}
+            foreach (var p in paths)
+            {
+                var fileSection = new Section(p.Key);
+                foreach (var x in p)
+                {
+                    var y = x;
+                    var file = x.Filename.Substring(x.Filename.LastIndexOf('/') + 1);
+                    var sse = new ChangesetElement(file, x.Status, x.Additions, x.Deletions);
+                    sse.Clicked.Subscribe(_ => weakReference.Get()?.FileClicked(y));
+                    fileSection.Add(sse);
+                }
+                sections.Add(fileSection);
+            }
+            //
+            //            var fileSection = new Section();
+            //            commitModel.Files.ForEach(x => {
+            //                var file = x.Filename.Substring(x.Filename.LastIndexOf('/') + 1);
+            //                var sse = new ChangesetElement(file, x.Status, x.Additions, x.Deletions);
+            //                sse.Tapped += () => ViewModel.GoToFileCommand.Execute(x);
+            //                fileSection.Add(sse);
+            //            });
 
-            Root.Add(_commentSection);
+            //            if (fileSection.Elements.Count > 0)
+            //                root.Add(fileSection);
+            //
 
-            var addComment = new StyledStringElement("Add Comment") { Image = Images.Pencil };
-            addComment.Tapped += () => ViewModel.GoToCommentCommand.ExecuteIfCan();
-            Root.Add(new Section { addComment });
+            var commentSection = new Section();
+            foreach (var comment in ViewModel.Comments)
+            {
+                //The path should be empty to indicate it's a comment on the entire commit, not a specific file
+                if (!string.IsNullOrEmpty(comment.Path))
+                    continue;
+
+                commentSection.Add(new CommentElement(comment.User.Login, comment.Body, comment.CreatedAt, comment.User.AvatarUrl));
+            }
+
+            if (commentSection.Elements.Count > 0)
+                sections.Add(commentSection);
+
+            var addComment = new StringElement("Add Comment") { Image = Octicon.Pencil.ToImage() };
+            addComment.Clicked.Subscribe(_ => AddCommentTapped());
+            sections.Add(new Section { addComment });
+            Root.Reset(sections);
         }
 
-		private void ShowExtraMenu()
-		{
-            _actionSheet = new UIActionSheet(Title);
-            var addComment = _actionSheet.AddButton("Add Comment");
-            var copySha = _actionSheet.AddButton("Copy Sha");
-            var shareButton = _actionSheet.AddButton("Share");
-            var showButton = _actionSheet.AddButton("Show in GitHub");
-            var cancelButton = _actionSheet.AddButton("Cancel");
-            _actionSheet.CancelButtonIndex = cancelButton;
-            _actionSheet.DismissWithClickedButtonIndex(cancelButton, true);
-            _actionSheet.Clicked += (s, e) => 
-			{
-				try
-				{
-					// Pin to menu
-					if (e.ButtonIndex == addComment)
-					{
-                        ViewModel.GoToCommentCommand.ExecuteIfCan();
-					}
-					else if (e.ButtonIndex == copySha)
-					{
-						UIPasteboard.General.String = ViewModel.Commit.Sha;
-					}
-					else if (e.ButtonIndex == shareButton)
-					{
-                        var item = new NSUrl(ViewModel.Commit.HtmlUrl);
-						var activityItems = new NSObject[] { item };
-						UIActivity[] applicationActivities = null;
-						var activityController = new UIActivityViewController (activityItems, applicationActivities);
-						PresentViewController (activityController, true, null);
-					}
-					else if (e.ButtonIndex == showButton)
-					{
-						ViewModel.GoToHtmlUrlCommand.Execute(null);
-					}
-				}
-				catch
-				{
-				}
+        void AddCommentTapped()
+        {
+            var composer = new MarkdownComposerViewController();
+            composer.PresentAsModal(this, async text =>
+            {
+                var hud = composer.CreateHud();
+                
+                using (UIApplication.SharedApplication.DisableInteraction())
+                using (NetworkActivity.ActivateNetwork())
+                using (hud.Activate("Commenting..."))
+                {
+                    try
+                    {
+                        await ViewModel.AddComment(text);
+                        composer.DismissViewController(true, null);
+                    }
+                    catch (Exception e)
+                    {
+                        AlertDialogService.ShowAlert("Unable to post comment!", e.Message);
+                    }
+                }
+            });
+        }
 
-			    _actionSheet = null;
-			};
+        private void ShowExtraMenu()
+        {
+            var changeset = ViewModel.Changeset;
+            if (changeset == null)
+                return;
 
-            _actionSheet.ShowInView(this.View);
-		}
+            var sheet = new UIActionSheet();
+            var addComment = sheet.AddButton("Add Comment");
+            var copySha = sheet.AddButton("Copy Sha");
+            var shareButton = sheet.AddButton("Share");
+            //var showButton = sheet.AddButton("Show in GitHub");
+            var cancelButton = sheet.AddButton("Cancel");
+            sheet.CancelButtonIndex = cancelButton;
+            sheet.Dismissed += (s, e) =>
+            {
+                BeginInvokeOnMainThread(() =>
+                {
+                    try
+                    {
+                        // Pin to menu
+                        if (e.ButtonIndex == addComment)
+                        {
+                            AddCommentTapped();
+                        }
+                        else if (e.ButtonIndex == copySha)
+                        {
+                            UIPasteboard.General.String = ViewModel.Changeset.Sha;
+                        }
+                        else if (e.ButtonIndex == shareButton)
+                        {
+                            var item = new NSUrl(ViewModel.Changeset.Url);
+                            var activityItems = new Foundation.NSObject[] { item };
+                            UIActivity[] applicationActivities = null;
+                            var activityController = new UIActivityViewController(activityItems, applicationActivities);
+                            PresentViewController(activityController, true, null);
+                        }
+                        //                else if (e.ButtonIndex == showButton)
+                        //                {
+                        //                    ViewModel.GoToHtmlUrlCommand.Execute(null);
+                        //                }
+                    }
+                    catch
+                    {
+                    }
+                });
+
+                sheet.Dispose();
+            };
+
+            sheet.ShowInView(this.View);
+        }
     }
 }
 

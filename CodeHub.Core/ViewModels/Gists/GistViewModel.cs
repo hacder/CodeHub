@@ -1,145 +1,123 @@
 using System;
-using System.Linq;
-using System.Reactive.Linq;
 using System.Threading.Tasks;
-using CodeHub.Core.Services;
-using CodeHub.Core.ViewModels.Users;
-using GitHubSharp.Models;
-using ReactiveUI;
-using Xamarin.Utilities.Core.Services;
-using Xamarin.Utilities.Core.ViewModels;
+using System.Windows.Input;
+using CodeHub.Core.ViewModels.User;
+using MvvmCross.Core.ViewModels;
+using Octokit;
 
 namespace CodeHub.Core.ViewModels.Gists
 {
-    public class GistViewModel : BaseViewModel, ILoadableViewModel, ICanGoToUrl
+    public class GistViewModel : LoadableViewModel
     {
-        private readonly IApplicationService _applicationService;
+        private readonly CollectionViewModel<GistComment> _comments = new CollectionViewModel<GistComment>();
+        private Gist _gist;
+        private bool _starred;
 
-        public string Id { get; set; }
+        public string Id
+        {
+            get;
+            private set;
+        }
 
-        private GistModel _gist;
-        public GistModel Gist
+        public Gist Gist
         {
             get { return _gist; }
             set { this.RaiseAndSetIfChanged(ref _gist, value); }
         }
 
-        private bool? _starred;
-        public bool? IsStarred
+        public bool IsStarred
         {
             get { return _starred; }
             private set { this.RaiseAndSetIfChanged(ref _starred, value); }
         }
 
-		public ReactiveList<GistCommentModel> Comments { get; private set; }
-
-        public IReactiveCommand LoadCommand { get; private set; }
-
-        public IReactiveCommand<object> GoToUserCommand { get; private set; }
-
-        public IReactiveCommand<object> GoToFileSourceCommand { get; private set; }
-
-        public IReactiveCommand<object> GoToViewableFileCommand { get; private set; }
-
-        public IReactiveCommand<object> GoToHtmlUrlCommand { get; private set; }
-
-        public IReactiveCommand GoToUrlCommand { get; private set; }
-
-        public IReactiveCommand ForkCommand { get; private set; }
-
-        public IReactiveCommand ToggleStarCommand { get; private set; }
-
-		public IReactiveCommand<object> ShareCommand { get; private set; }
-
-        public GistViewModel(IApplicationService applicationService, IShareService shareService)
+        public CollectionViewModel<GistComment> Comments
         {
-            _applicationService = applicationService;
-            Comments = new ReactiveList<GistCommentModel>();
-
-            Title = "Gist";
-
-            GoToUrlCommand = this.CreateUrlCommand();
-
-            this.WhenAnyValue(x => x.Gist).Where(x => x != null && x.Files != null && x.Files.Count > 0)
-                .Select(x => x.Files.First().Key).Subscribe(x => 
-                    Title = x);
-
-            ShareCommand = ReactiveCommand.Create(this.WhenAnyValue(x => x.Gist).Select(x => x != null));
-            ShareCommand.Subscribe(_ => shareService.ShareUrl(Gist.HtmlUrl));
-
-            ToggleStarCommand = ReactiveCommand.CreateAsyncTask(
-                this.WhenAnyValue(x => x.IsStarred).Select(x => x.HasValue),
-                async t =>
-            {
-                try
-                {
-                    if (!IsStarred.HasValue) return;
-                    var request = IsStarred.Value ? _applicationService.Client.Gists[Id].Unstar() : _applicationService.Client.Gists[Id].Star();
-                    await _applicationService.Client.ExecuteAsync(request);
-                    IsStarred = !IsStarred.Value;
-                }
-                catch (Exception e)
-                {
-                    throw new Exception("Unable to start gist. Please try again.", e);
-                }
-            });
-
-            ForkCommand = ReactiveCommand.CreateAsyncTask(async t =>
-            {
-                var data = await _applicationService.Client.ExecuteAsync(_applicationService.Client.Gists[Id].ForkGist());
-                var forkedGist = data.Data;
-                var vm = CreateViewModel<GistViewModel>();
-                vm.Id = forkedGist.Id;
-                vm.Gist = forkedGist;
-                ShowViewModel(vm);
-            });
-
-            GoToViewableFileCommand = ReactiveCommand.Create();
-            GoToViewableFileCommand.OfType<GistFileModel>().Subscribe(x =>
-            {
-
-            });
-
-            GoToHtmlUrlCommand = ReactiveCommand.Create(this.WhenAnyValue(x => x.Gist).Select(x => x != null && !string.IsNullOrEmpty(x.HtmlUrl)));
-            GoToHtmlUrlCommand.Select(_ => Gist.HtmlUrl).Subscribe(x =>
-            {
-                var vm = CreateViewModel<WebBrowserViewModel>();
-                vm.Url = x;
-
-            });
-
-            GoToFileSourceCommand = ReactiveCommand.Create();
-            GoToFileSourceCommand.OfType<GistFileModel>().Subscribe(x =>
-            {
-                var vm = CreateViewModel<GistFileViewModel>();
-                vm.Id = Id;
-                vm.GistFile = x;
-                vm.Filename = x.Filename;
-                ShowViewModel(vm);
-            });
-
-            GoToUserCommand = ReactiveCommand.Create(this.WhenAnyValue(x => x.Gist).Select(x => x != null && x.Owner != null));
-            GoToUserCommand.Subscribe(x =>
-            {
-                var vm = CreateViewModel<UserViewModel>();
-                vm.Username = Gist.Owner.Login;
-                ShowViewModel(vm);
-            });
-
-            LoadCommand = ReactiveCommand.CreateAsyncTask(t =>
-            {
-                var forceCacheInvalidation = t as bool?;
-                var t1 = this.RequestModel(_applicationService.Client.Gists[Id].Get(), forceCacheInvalidation, response => Gist = response.Data);
-			    this.RequestModel(_applicationService.Client.Gists[Id].IsGistStarred(), forceCacheInvalidation, response => IsStarred = response.Data).FireAndForget();
-			    Comments.SimpleCollectionLoad(_applicationService.Client.Gists[Id].GetComments(), forceCacheInvalidation).FireAndForget();
-                return t1;
-            });
+            get { return _comments; }
         }
 
-        public async Task Edit(GistEditModel editModel)
+        public ICommand GoToUserCommand
         {
-			var response = await _applicationService.Client.ExecuteAsync(_applicationService.Client.Gists[Id].EditGist(editModel));
-            Gist = response.Data;
+            get { return new MvxCommand(() => ShowViewModel<UserViewModel>(new UserViewModel.NavObject { Username = Gist.Owner.Login }), () => Gist != null && Gist.Owner != null); }
+        }
+
+        public ICommand GoToHtmlUrlCommand
+        {
+            get { return new MvxCommand(() => GoToUrlCommand.Execute(_gist.HtmlUrl), () => _gist != null); }
+        }
+
+        public ICommand ForkCommand
+        {
+            get
+            {
+                return new MvxCommand(() => ForkGist());
+            }
+        }
+
+        public ICommand ToggleStarCommand
+        {
+            get
+            {
+                return new MvxCommand(() => ToggleStarred(), () => Gist != null);
+            }
+        }
+
+        public static GistViewModel FromGist(Gist gist)
+        {
+            return new GistViewModel
+            {
+                Gist = gist,
+                Id = gist.Id
+            };
+        }
+
+        public void Init(NavObject navObject)
+        {
+            Id = navObject.Id;
+        }
+
+        private async Task ToggleStarred()
+        {
+            try
+            {
+                var request = IsStarred ? this.GetApplication().Client.Gists[Id].Unstar() : this.GetApplication().Client.Gists[Id].Star();
+                await this.GetApplication().Client.ExecuteAsync(request);
+                IsStarred = !IsStarred;
+            }
+            catch
+            {
+                DisplayAlert("Unable to start gist. Please try again.");
+            }
+        }
+
+        public async Task ForkGist()
+        {
+            var data = await this.GetApplication().Client.ExecuteAsync(this.GetApplication().Client.Gists[Id].ForkGist());
+            var forkedGist = data.Data;
+            ShowViewModel<GistViewModel>(new GistViewModel.NavObject { Id = forkedGist.Id });
+        }
+
+        protected override async Task Load()
+        {
+            Comments.Items.Clear();
+
+            this.GetApplication().GitHubClient.Gist.IsStarred(Id)
+                .ToBackground(x => IsStarred = x);
+
+            this.GetApplication().GitHubClient.Gist.Comment.GetAllForGist(Id)
+                .ToBackground(Comments.Items.AddRange);
+
+            Gist = await this.GetApplication().GitHubClient.Gist.Get(Id);
+        }
+
+        public async Task Edit(GistUpdate editModel)
+        {
+            Gist = await this.GetApplication().GitHubClient.Gist.Edit(Id, editModel);
+        }
+
+        public class NavObject
+        {
+            public string Id { get; set; }
         }
     }
 }

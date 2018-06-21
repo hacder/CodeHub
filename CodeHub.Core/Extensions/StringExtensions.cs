@@ -1,6 +1,5 @@
-﻿using System;
-
-namespace CodeHub
+﻿// Analysis disable once CheckNamespace
+namespace System
 {
     public static class StringExtensions
     {

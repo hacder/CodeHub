@@ -1,6 +1,8 @@
+using CodeHub.Core.ViewModels;
+
 namespace CodeHub.Core.Filters
 {
-    public class NotificationsFilterModel
+    public class NotificationsFilterModel : FilterModel<NotificationsFilterModel>
     {
         public bool All { get; set; }
 
@@ -33,9 +35,9 @@ namespace CodeHub.Core.Filters
             }
         }
 
-        public NotificationsFilterModel Clone()
+        public override NotificationsFilterModel Clone()
         {
-            return (NotificationsFilterModel)MemberwiseClone();
+            return (NotificationsFilterModel)this.MemberwiseClone();
         }
 
         public static NotificationsFilterModel CreateUnreadFilter()

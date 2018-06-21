@@ -1,27 +1,49 @@
 ﻿using System;
 using ReactiveUI;
+using CodeHub.Core.Utilities;
+using Humanizer;
+using System.Reactive;
+using Octokit;
+using System.Linq;
 
 namespace CodeHub.Core.ViewModels.Gists
 {
-    public class GistItemViewModel : ReactiveObject
+    public class GistItemViewModel : ReactiveObject, ICanGoToViewModel
     {
-        public string ImageUrl { get; private set; }
+        public GitHubAvatar Avatar { get; }
 
-        public string Title { get; private set; }
+        public string Title { get; }
 
-        public string Description { get; private set; }
+        public string Description { get; }
 
-        public DateTimeOffset UpdatedAt { get; private set; }
+        public DateTimeOffset UpdatedAt { get; }
 
-        public IReactiveCommand GoToCommand { get; private set; }
+        public string UpdatedString { get; }
 
-        public GistItemViewModel(string title, string imageUrl, string description, DateTimeOffset updatedAt, Action<GistItemViewModel> gotoAction)
+        public ReactiveCommand<Unit, Unit> GoToCommand { get; }
+
+        public string Id { get; }
+
+        public Gist Gist { get; }
+
+        private static string GetGistTitle(Gist gist)
         {
-            Title = title;
-            ImageUrl = imageUrl;
-            Description = description;
-            UpdatedAt = updatedAt;
-            GoToCommand = ReactiveCommand.Create().WithSubscription(x => gotoAction(this));
+            var title = (gist.Owner == null) ? "Anonymous" : gist.Owner.Login;
+            if (gist.Files.Count > 0)
+                title = gist.Files.First().Key;
+            return title;
+        }
+
+        public GistItemViewModel(Gist gist, Action<GistItemViewModel> gotoAction)
+        {
+            Gist = gist;
+            Id = gist.Id;
+            Title = GetGistTitle(gist);
+            Description = string.IsNullOrEmpty(gist.Description) ? "Gist " + gist.Id : gist.Description;
+            Avatar = new GitHubAvatar(gist.Owner?.AvatarUrl);
+            UpdatedAt = gist.UpdatedAt;
+            UpdatedString = UpdatedAt.Humanize();
+            GoToCommand = ReactiveCommand.Create(() => gotoAction(this));
         }
     }
 }

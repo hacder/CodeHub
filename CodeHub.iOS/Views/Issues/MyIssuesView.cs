@@ -1,79 +1,50 @@
 using CodeHub.Core.ViewModels.Issues;
-using MonoTouch.UIKit;
-using ReactiveUI;
-using System.Reactive.Linq;
-using System.Reactive;
-using Xamarin.Utilities.DialogElements;
-using System.Linq;
-using System.Collections.Generic;
-using GitHubSharp.Models;
-using CodeHub.Core.Filters;
-using CodeHub.Core.Utilities;
+using UIKit;
 using System;
-using CodeHub.iOS.TableViewSources;
 
 namespace CodeHub.iOS.Views.Issues
 {
-    public class MyIssuesView : BaseIssuesView<MyIssuesViewModel>
+    public class MyIssuesView : BaseIssuesView
     {
-		private UISegmentedControl _viewSegment;
-		private UIBarButtonItem _segmentBarButton;
+        private readonly UISegmentedControl _viewSegment = new UISegmentedControl(new object[] { "Open", "Closed", "Custom" });
+        private UIBarButtonItem _segmentBarButton;
+
+        public static MyIssuesView Create()
+            => new MyIssuesView { ViewModel = new MyIssuesViewModel() };
 
         public override void ViewDidLoad()
         {
             base.ViewDidLoad();
 
-			_viewSegment = new UISegmentedControl(new object[] { "Open", "Closed", "Custom" });
-			_segmentBarButton = new UIBarButtonItem(_viewSegment);
+            _segmentBarButton = new UIBarButtonItem(_viewSegment);
             _segmentBarButton.Width = View.Frame.Width - 10f;
-			ToolbarItems = new [] { new UIBarButtonItem(UIBarButtonSystemItem.FlexibleSpace), _segmentBarButton, new UIBarButtonItem(UIBarButtonSystemItem.FlexibleSpace) };
+            ToolbarItems = new [] { new UIBarButtonItem(UIBarButtonSystemItem.FlexibleSpace), _segmentBarButton, new UIBarButtonItem(UIBarButtonSystemItem.FlexibleSpace) };
+            var vm = (MyIssuesViewModel)ViewModel;
+            var weakVm = new WeakReference<MyIssuesViewModel>(vm);
 
-            TableView.Source = new IssueTableViewSource(TableView, ViewModel.Issues);
+            vm.Bind(x => x.SelectedFilter).Subscribe(x =>
+            {
+                var goodVm = weakVm.Get();
 
-//
-//
-//            ViewModel.Issues.Changed.Select(x => Unit.Default).Merge(
-//                ViewModel.WhenAnyValue(x => x.Filter).Select(x => Unit.Default)).Subscribe(_ =>
-//                    Root.Reset(ViewModel.Issues.GroupBy(x => x.RepositoryFullName).Select(x => new Section(x.Key) { x.Select(CreateElement) })));
-//
+                if (x == 2 && goodVm != null)
+                {
+                    var filter = new ViewControllers.Filters.MyIssuesFilterViewController(goodVm.Issues);
+                    var nav = new UINavigationController(filter);
+                    PresentViewController(nav, true, null);
+                }
 
-//			vm.Bind(x => x.SelectedFilter, x =>
-//			{
-//				if (x == 2)
-//				{
-//					ShowFilterController(new CodeHub.iOS.Views.Filters.MyIssuesFilterViewController(vm.Issues));
-//				}
-//
-//                // If there is searching going on. Finish it.
-//                FinishSearch();
-//			});
+                // If there is searching going on. Finish it.
+                FinishSearch();
+            });
+
+            this.BindCollection(vm.Issues, CreateElement);
+
+            OnActivation(d =>
+            {
+                d(vm.Bind(x => x.SelectedFilter, true).Subscribe(x => _viewSegment.SelectedSegment = (nint)x));
+                d(_viewSegment.GetChangedObservable().Subscribe(x => vm.SelectedFilter = x));
+            });
         }
-//
-//
-//        protected virtual List<IGrouping<string, IssueModel>> Group(IEnumerable<IssueModel> model)
-//        {
-//            var order = ViewModel.Filter.SortType;
-//            if (order == BaseIssuesFilterModel.Sort.Comments)
-//            {
-//                var a = ViewModel.Filter.Ascending ? model.OrderBy(x => x.Comments) : model.OrderByDescending(x => x.Comments);
-//                var g = a.GroupBy(x => FilterGroup.IntegerCeilings.First(r => r > x.Comments)).ToList();
-//                return FilterGroup.CreateNumberedGroup(g, "Comments");
-//            }
-//            if (order == BaseIssuesFilterModel.Sort.Updated)
-//            {
-//                var a = ViewModel.Filter.Ascending ? model.OrderBy(x => x.UpdatedAt) : model.OrderByDescending(x => x.UpdatedAt);
-//                var g = a.GroupBy(x => FilterGroup.IntegerCeilings.First(r => r > x.UpdatedAt.TotalDaysAgo()));
-//                return FilterGroup.CreateNumberedGroup(g, "Days Ago", "Updated");
-//            }
-//            if (order == BaseIssuesFilterModel.Sort.Created)
-//            {
-//                var a = ViewModel.Filter.Ascending ? model.OrderBy(x => x.CreatedAt) : model.OrderByDescending(x => x.CreatedAt);
-//                var g = a.GroupBy(x => FilterGroup.IntegerCeilings.First(r => r > x.CreatedAt.TotalDaysAgo()));
-//                return FilterGroup.CreateNumberedGroup(g, "Days Ago", "Created");
-//            }
-//
-//            return null;
-//        }
 
         public override void ViewWillAppear(bool animated)
         {

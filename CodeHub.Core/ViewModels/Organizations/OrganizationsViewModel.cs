@@ -1,51 +1,42 @@
-using System;
-using System.Reactive.Linq;
-using CodeHub.Core.Services;
+using System.Threading.Tasks;
+using System.Windows.Input;
+using CodeHub.Core.ViewModels;
 using GitHubSharp.Models;
-using ReactiveUI;
-using Xamarin.Utilities.Core.ViewModels;
-using CodeHub.Core.ViewModels.Users;
-using Xamarin.Utilities.Core;
+using MvvmCross.Core.ViewModels;
 
 namespace CodeHub.Core.ViewModels.Organizations
 {
-    public class OrganizationsViewModel : BaseViewModel, ILoadableViewModel, IProvidesSearchKeyword
-	{
-        public IReadOnlyReactiveList<UserItemViewModel> Organizations { get; private set; }
+    public class OrganizationsViewModel : LoadableViewModel
+    {
+        public CollectionViewModel<BasicUserModel> Organizations { get; }
 
-        public string Username { get; set; }
+        public string Username { get; private set; }
 
-        public IReactiveCommand<object> GoToOrganizationCommand { get; private set; }
-
-        public IReactiveCommand LoadCommand { get; private set; }
-
-        private string _searchKeyword;
-        public string SearchKeyword
+        public void Init(NavObject navObject)
         {
-            get { return _searchKeyword; }
-            set { this.RaiseAndSetIfChanged(ref _searchKeyword, value); }
+            Username = navObject.Username;
         }
 
-        public OrganizationsViewModel(IApplicationService applicationService)
+        public OrganizationsViewModel()
         {
-            var organizations = new ReactiveList<BasicUserModel>();
-            Organizations = organizations.CreateDerivedCollection(
-                x => new UserItemViewModel(x.Login, x.AvatarUrl, true, GoToOrganizationCommand.ExecuteIfCan),
-                x => x.Login.ContainsKeyword(SearchKeyword),
-                signalReset: this.WhenAnyValue(x => x.SearchKeyword));
-
-            GoToOrganizationCommand = ReactiveCommand.Create();
-            GoToOrganizationCommand.OfType<UserItemViewModel>().Subscribe(x =>
-            {
-                var vm = CreateViewModel<OrganizationViewModel>();
-                vm.Username = x.Name;
-                ShowViewModel(vm);
-            });
-
-            LoadCommand = ReactiveCommand.CreateAsyncTask(t =>
-                organizations.SimpleCollectionLoad(applicationService.Client.Users[Username].GetOrganizations(),
-                    t as bool?));
+            Title = "Organizations";
+            Organizations = new CollectionViewModel<BasicUserModel>();
         }
-	}
+
+        public ICommand GoToOrganizationCommand
+        {
+            get { return new MvxCommand<BasicUserModel>(x => ShowViewModel<OrganizationViewModel>(new OrganizationViewModel.NavObject { Name = x.Login }));}
+        }
+
+        protected override Task Load()
+        {
+            return Organizations.SimpleCollectionLoad(this.GetApplication().Client.Users[Username].GetOrganizations());
+        }
+
+        public class NavObject
+        {
+            public string Username { get; set; }
+        }
+    }
 }
 

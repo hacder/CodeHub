@@ -1,51 +1,25 @@
 ﻿using ReactiveUI;
 using CodeHub.Core.ViewModels.Repositories;
-using CodeHub.iOS.Cells;
+using CodeHub.iOS.TableViewCells;
+using System;
+using UIKit;
 
 namespace CodeHub.iOS.TableViewSources
 {
     public class RepositoryTableViewSource : ReactiveTableViewSource<RepositoryItemViewModel>
     {
-        private RepositoryCellView _usedForHeight;
+        private readonly static nfloat _estimatedHeight = 100.0f;
 
-        public RepositoryTableViewSource(MonoTouch.UIKit.UITableView tableView, IReactiveNotifyCollectionChanged<RepositoryItemViewModel> collection) 
-            : base(tableView, collection,  RepositoryCellView.Key, 60.0f)
+        public RepositoryTableViewSource(UITableView tableView, IReactiveNotifyCollectionChanged<RepositoryItemViewModel> collection)
+            : base(tableView, collection, RepositoryCellView.Key, UITableView.AutomaticDimension, _estimatedHeight)
         {
             tableView.RegisterNibForCellReuse(RepositoryCellView.Nib, RepositoryCellView.Key);
         }
 
-        public RepositoryTableViewSource(MonoTouch.UIKit.UITableView tableView) 
-            : base(tableView)
+        public RepositoryTableViewSource(UITableView tableView)
+            : base(tableView, UITableView.AutomaticDimension, _estimatedHeight)
         {
             tableView.RegisterNibForCellReuse(RepositoryCellView.Nib, RepositoryCellView.Key);
-        }
-
-        public override float GetHeightForRow(MonoTouch.UIKit.UITableView tableView, MonoTouch.Foundation.NSIndexPath indexPath)
-        {
-            if (_usedForHeight == null)
-                _usedForHeight = (RepositoryCellView)tableView.DequeueReusableCell(RepositoryCellView.Key);
-
-            var item = ItemAt(indexPath) as RepositoryItemViewModel;
-            if (item != null)
-            {
-                _usedForHeight.ViewModel = item;
-                _usedForHeight.SetNeedsUpdateConstraints();
-                _usedForHeight.UpdateConstraintsIfNeeded();
-                _usedForHeight.Bounds = new System.Drawing.RectangleF(0, 0, tableView.Bounds.Width, tableView.Bounds.Height);
-                _usedForHeight.SetNeedsLayout();
-                _usedForHeight.LayoutIfNeeded();
-                return _usedForHeight.ContentView.SystemLayoutSizeFittingSize(MonoTouch.UIKit.UIView.UILayoutFittingCompressedSize).Height + 1;
-            }
-
-            return base.GetHeightForRow(tableView, indexPath);
-        }
-
-        public override void RowSelected(MonoTouch.UIKit.UITableView tableView, MonoTouch.Foundation.NSIndexPath indexPath)
-        {
-            base.RowSelected(tableView, indexPath);
-            var item = ItemAt(indexPath) as RepositoryItemViewModel;
-            if (item != null)
-                item.GoToCommand.ExecuteIfCan();
         }
     }
 }

@@ -1,39 +1,49 @@
 ﻿using ReactiveUI;
 using System;
+using CodeHub.Core.Utilities;
+using System.Diagnostics;
+using System.Reactive;
 
 namespace CodeHub.Core.ViewModels.Repositories
 {
-    public class RepositoryItemViewModel : ReactiveObject
+    [DebuggerDisplay("{Owner}/{Name}")]
+    public class RepositoryItemViewModel : ReactiveObject, ICanGoToViewModel
     {
-        public string Name { get; private set; }
+        public string Name => Repository.Name;
 
-        public string Owner { get; private set; }
+        public string Owner => Repository.Owner?.Login ?? string.Empty;
 
-        public string ImageUrl { get; private set; }
+        public GitHubAvatar Avatar => new GitHubAvatar(Repository.Owner?.AvatarUrl);
 
-        public string Description { get; private set; }
+        public string Description { get; }
 
-        public int Stars { get; private set; }
+        public string Stars => Repository.StargazersCount.ToString();
 
-        public int Forks { get; private set; }
+        public string Forks => Repository.ForksCount.ToString();
+            
+        public bool ShowOwner { get; }
 
-        public bool ShowOwner { get; private set; }
+        public Octokit.Repository Repository { get; }
 
-        public IReactiveCommand GoToCommand { get; private set; }
+        public ReactiveCommand<Unit, Unit> GoToCommand { get; }
 
-        internal RepositoryItemViewModel(string name, string owner, string imageUrl,
-                                         string description, int stars, int forks,
-                                         bool showOwner,
-                                         Action<RepositoryItemViewModel> gotoCommand)
+        public RepositoryItemViewModel(Octokit.Repository repository, bool showOwner, bool showDescription, Action<RepositoryItemViewModel> gotoCommand)
         {
-            Name = name;
-            Owner = owner;
-            ImageUrl = imageUrl;
-            Description = description;
-            Stars = stars;
-            Forks = forks;
+            if (showDescription)
+            {
+                if (!string.IsNullOrEmpty(repository.Description) && repository.Description.IndexOf(':') >= 0)
+                    Description = Emojis.FindAndReplace(repository.Description);
+                else
+                    Description = repository.Description;
+            }
+            else
+            {
+                Description = null;
+            }
+
+            Repository = repository;
             ShowOwner = showOwner;
-            GoToCommand = ReactiveCommand.Create().WithSubscription(x => gotoCommand(this));
+            GoToCommand = ReactiveCommand.Create(() => gotoCommand?.Invoke(this));
         }
     }
 }

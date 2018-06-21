@@ -1,49 +1,21 @@
-﻿using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using CodeHub.Core.Data;
 
 namespace CodeHub.Core.Services
 {
-    public interface IAccountsService : IEnumerable<GitHubAccount>
+    public interface IAccountsService
     {
-        /// <summary>
-        /// Gets the active account
-        /// </summary>
-        GitHubAccount ActiveAccount { get; set; }
+        Task<Account> GetActiveAccount();
 
-        /// <summary>
-        /// Gets the default account
-        /// </summary>
-        GitHubAccount GetDefault();
+        Task SetActiveAccount(Account account);
 
-        /// <summary>
-        /// Insert the specified account.
-        /// </summary>
-        void Insert(GitHubAccount account);
+        Task<IEnumerable<Account>> GetAccounts();
 
-        /// <summary>
-        /// Remove the specified account.
-        /// </summary>
-        void Remove(GitHubAccount account);
+        Task Save(Account account);
 
-        /// <summary>
-        /// Update this instance in the database
-        /// </summary>
-        void Update(GitHubAccount account);
+        Task Remove(Account account);
 
-        /// <summary>
-        /// Checks to see whether a specific account exists (Username comparison)
-        /// </summary>
-        bool Exists(GitHubAccount account);
-
-        /// <summary>
-        /// Find the specified account via it's username
-        /// </summary>
-        GitHubAccount Find(string domain, string username);
-
-        /// <summary>
-        /// An observable sequence of account changing events
-        /// </summary>
-        IObservable<GitHubAccount> ActiveAccountChanged { get; }
+        Task<Account> Get(string domain, string username);
     }
 }

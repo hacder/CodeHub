@@ -1,13 +1,13 @@
-﻿using MonoTouch.UIKit;
-using System.Drawing;
+using UIKit;
+using CoreGraphics;
 
-namespace RepositoryStumble.Transitions
+namespace CodeHub.iOS.Transitions
 {
     public class SlideDownTransition : UIViewControllerTransitioningDelegate
     {
         private TransitionAnimator _animator;
 
-        public override IUIViewControllerAnimatedTransitioning PresentingController(UIViewController presented, UIViewController presenting, UIViewController source)
+        public override IUIViewControllerAnimatedTransitioning GetAnimationControllerForPresentedController(UIViewController presented, UIViewController presenting, UIViewController source)
         {
             _animator = new TransitionAnimator();
             _animator.Presenting = true;

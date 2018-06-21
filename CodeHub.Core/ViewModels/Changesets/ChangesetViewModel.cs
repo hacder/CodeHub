@@ -1,123 +1,109 @@
-using System;
-using System.Reactive.Linq;
+using System.Windows.Input;
+using MvvmCross.Core.ViewModels;
 using CodeHub.Core.Services;
 using CodeHub.Core.ViewModels.Repositories;
 using GitHubSharp.Models;
 using System.Threading.Tasks;
 using CodeHub.Core.ViewModels.Source;
-using ReactiveUI;
-
-using Xamarin.Utilities.Core.ViewModels;
+using MvvmCross.Platform;
+using System.Reactive.Linq;
+using CodeHub.Core.ViewModels.User;
+using System.Reactive;
 
 namespace CodeHub.Core.ViewModels.Changesets
 {
-    public class ChangesetViewModel : BaseViewModel, ILoadableViewModel, ICanGoToUrl
+    public class ChangesetViewModel : LoadableViewModel
     {
+        private readonly CollectionViewModel<CommentModel> _comments = new CollectionViewModel<CommentModel>();
         private readonly IApplicationService _applicationService;
-
-		public string Node { get; set; }
-
-		public string RepositoryOwner { get; set; }
-
-		public string RepositoryName { get; set; }
-
-        public bool ShowRepository { get; set; }
-
+        private readonly IFeaturesService _featuresService;
         private CommitModel _commitModel;
-        public CommitModel Commit
+
+        public string Node { get; private set; }
+
+        public string User { get; private set; }
+
+        public string Repository { get; private set; }
+
+        public bool ShowRepository { get; private set; }
+
+        public CommitModel Changeset
         {
             get { return _commitModel; }
             private set { this.RaiseAndSetIfChanged(ref _commitModel, value); }
         }
 
-        public IReactiveCommand LoadCommand { get; private set; }
-
-        public IReactiveCommand<object> GoToFileCommand { get; private set; }
-
-        public IReactiveCommand<object> GoToRepositoryCommand { get; private set; }
-
-        public IReactiveCommand<object> GoToHtmlUrlCommand { get; private set; }
-
-        public IReactiveCommand GoToCommentCommand { get; private set; }
-
-        public ReactiveList<CommentModel> Comments { get; private set; }
-
-        public IReactiveCommand GoToUrlCommand { get; private set; }
-        
-        public ChangesetViewModel(IApplicationService applicationService)
+        private bool _shouldShowPro; 
+        public bool ShouldShowPro
         {
-            _applicationService = applicationService;
+            get { return _shouldShowPro; }
+            protected set { this.RaiseAndSetIfChanged(ref _shouldShowPro, value); }
+        }
 
-            Title = "Commit";
+        public ICommand GoToRepositoryCommand
+        {
+            get { return new MvxCommand(() => ShowViewModel<RepositoryViewModel>(new RepositoryViewModel.NavObject { Username = User, Repository = Repository })); }
+        }
 
-            GoToUrlCommand = this.CreateUrlCommand();
+        public ICommand GoToHtmlUrlCommand
+        {
+            get { return new MvxCommand(() => ShowViewModel<WebBrowserViewModel>(new WebBrowserViewModel.NavObject { Url = _commitModel.Url }), () => _commitModel != null); }
+        }
 
-            Comments = new ReactiveList<CommentModel>();
+        public CollectionViewModel<CommentModel> Comments
+        {
+            get { return _comments; }
+        }
 
-            var goToUrlCommand = this.CreateUrlCommand();
-            GoToHtmlUrlCommand = ReactiveCommand.Create(this.WhenAnyValue(x => x.Commit).Select(x => x != null));
-            GoToHtmlUrlCommand.Select(x => Commit.HtmlUrl).Subscribe(goToUrlCommand.ExecuteIfCan);
+        public ReactiveUI.ReactiveCommand<Unit, bool> GoToOwner { get; }
 
-            GoToRepositoryCommand = ReactiveCommand.Create();
-            GoToRepositoryCommand.Subscribe(_ =>
+        public ChangesetViewModel(IApplicationService application, IFeaturesService featuresService)
+        {
+            _applicationService = application;
+            _featuresService = featuresService;
+
+            GoToOwner = ReactiveUI.ReactiveCommand.Create(
+                () => ShowViewModel<UserViewModel>(new UserViewModel.NavObject { Username = Changeset?.Author?.Login }),
+                this.Bind(x => x.Changeset, true).Select(x => x?.Author?.Login != null));
+        }
+
+        public void Init(NavObject navObject)
+        {
+            User = navObject.Username;
+            Repository = navObject.Repository;
+            Node = navObject.Node;
+            ShowRepository = navObject.ShowRepository;
+            Title = "Commit " + (Node.Length > 6 ? Node.Substring(0, 6) : Node);
+        }
+
+        protected override Task Load()
+        {
+            if (_featuresService.IsProEnabled)
+                ShouldShowPro = false;
+            else
             {
-                var vm = CreateViewModel<RepositoryViewModel>();
-                vm.RepositoryOwner = RepositoryOwner;
-                vm.RepositoryName = RepositoryName;
-                ShowViewModel(vm);
-            });
+                var request = _applicationService.Client.Users[User].Repositories[Repository].Get();
+                _applicationService.Client.ExecuteAsync(request)
+                    .ToBackground(x => ShouldShowPro = x.Data.Private && !_featuresService.IsProEnabled);
+            }
 
-            GoToCommentCommand = ReactiveCommand.Create().WithSubscription(_ =>
-            {
-                var vm = CreateViewModel<CommitCommentViewModel>();
-                vm.RepositoryOwner = RepositoryOwner;
-                vm.RepositoryName = RepositoryName;
-                vm.Node = Node;
-                vm.CommentAdded.Subscribe(Comments.Add);
-                ShowViewModel(vm);
-            });
+            var t1 = this.RequestModel(_applicationService.Client.Users[User].Repositories[Repository].Commits[Node].Get(), response => Changeset = response.Data);
+            Comments.SimpleCollectionLoad(_applicationService.Client.Users[User].Repositories[Repository].Commits[Node].Comments.GetAll()).ToBackground();
+            return t1;
+        }
 
-            GoToFileCommand = ReactiveCommand.Create();
-            GoToFileCommand.OfType<CommitModel.CommitFileModel>().Subscribe(x =>
-            {
-                if (x.Patch == null)
-                {
-                    var vm = CreateViewModel<SourceViewModel>();
-                    vm.Branch = Commit.Sha;
-                    vm.RepositoryOwner = RepositoryOwner;
-                    vm.RepositoryName = RepositoryName;
-//                    vm.Items = new [] 
-//                    { 
-//                        new SourceViewModel.SourceItemModel 
-//                        {
-//                            ForceBinary = true,
-//                            GitUrl = x.BlobUrl,
-//                            Name = x.Filename,
-//                            Path = x.Filename,
-//                            HtmlUrl = x.BlobUrl
-//                        }
-//                    };
-//                    vm.CurrentItemIndex = 0;
-                    ShowViewModel(vm);
-                }
-                else
-                {
-                    var vm = CreateViewModel<ChangesetDiffViewModel>();
-                    vm.Username = RepositoryOwner;
-                    vm.Repository = RepositoryName;
-                    vm.Branch = Commit.Sha;
-                    vm.Filename = x.Filename;
-                    ShowViewModel(vm);
-                }
-            });
+        public async Task AddComment(string text)
+        {
+            var c = await _applicationService.Client.ExecuteAsync(_applicationService.Client.Users[User].Repositories[Repository].Commits[Node].Comments.Create(text));
+            Comments.Items.Add(c.Data);
+        }
 
-            LoadCommand = ReactiveCommand.CreateAsyncTask(t =>
-            {
-                var forceCacheInvalidation = t as bool?;
-                var t1 = this.RequestModel(_applicationService.Client.Users[RepositoryOwner].Repositories[RepositoryName].Commits[Node].Get(), forceCacheInvalidation, response => Commit = response.Data);
-                Comments.SimpleCollectionLoad(_applicationService.Client.Users[RepositoryOwner].Repositories[RepositoryName].Commits[Node].Comments.GetAll(), forceCacheInvalidation).FireAndForget();
-                return t1;
-            });
+        public class NavObject
+        {
+            public string Username { get; set; }
+            public string Repository { get; set; }
+            public string Node { get; set; }
+            public bool ShowRepository { get; set; }
         }
     }
 }

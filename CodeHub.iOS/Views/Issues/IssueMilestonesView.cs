@@ -1,22 +1,23 @@
 using System;
-using System.Reactive.Linq;
+using CodeHub.iOS.ViewControllers;
 using CodeHub.Core.ViewModels.Issues;
 using System.Linq;
-using CodeHub.iOS.Elements;
-using MonoTouch.UIKit;
-using ReactiveUI;
-using Xamarin.Utilities.ViewControllers;
+using UIKit;
+using CodeHub.iOS.Utilities;
+using CodeHub.iOS.DialogElements;
 
 namespace CodeHub.iOS.Views.Issues
 {
-    public class IssueMilestonesView : ViewModelCollectionViewController<IssueMilestonesViewModel>
+    public class IssueMilestonesView : ViewModelCollectionDrivenDialogViewController
     {
-		public IssueMilestonesView()
-            : base(searchbarEnabled: false)
-		{
-			Title = "Milestones";
-			//NoItemsText = "No Milestones";
-		}
+        public IssueMilestonesView()
+        {
+            Title = "Milestones";
+            EnableSearch = false;
+
+            EmptyView = new Lazy<UIView>(() =>
+                new EmptyListView(Octicon.Milestone.ToEmptyListImage(), "There are no milestones."));
+        }
 
         public override void ViewDidLoad()
         {
@@ -25,27 +26,29 @@ namespace CodeHub.iOS.Views.Issues
             TableView.RowHeight = 80f;
             TableView.SeparatorInset = new UIEdgeInsets(0, 0, 0, 0);
 
-            this.BindList(ViewModel.Milestones, x => {
-                var e = new MilestoneElement(x);
-				e.Tapped += () => {
-                    if (ViewModel.SelectedMilestone != null && ViewModel.SelectedMilestone.Number == x.Number)
-                        ViewModel.SelectedMilestone = null;
-					else
-                        ViewModel.SelectedMilestone = x;
-				};
-                if (ViewModel.SelectedMilestone != null && ViewModel.SelectedMilestone.Number == x.Number)
-					e.Accessory = UITableViewCellAccessory.Checkmark;
-				return e;
-			});
+            var vm = (IssueMilestonesViewModel)ViewModel;
+            BindCollection(vm.Milestones, x => {
+                var e = new MilestoneElement(x.Number, x.Title, x.OpenIssues, x.ClosedIssues, x.DueOn);
+                e.Tapped += () => {
+                    if (vm.SelectedMilestone != null && vm.SelectedMilestone.Number == x.Number)
+                        vm.SelectedMilestone = null;
+                    else
+                        vm.SelectedMilestone = x;
+                };
+                if (vm.SelectedMilestone != null && vm.SelectedMilestone.Number == x.Number)
+                    e.Accessory = UITableViewCellAccessory.Checkmark;
+                return e;
+            });
 
-            ViewModel.WhenAnyValue(x => x.SelectedMilestone).Where(x => x != null).Subscribe(x =>
-			{
-				if (Root.Count == 0)
-					return;
-				foreach (var m in Root[0].Cast<MilestoneElement>())
-					m.Accessory = (x != null && m.Milestone.Number == x.Number) ? UITableViewCellAccessory.Checkmark : UITableViewCellAccessory.None;
-				Root.Reload(Root[0], UITableViewRowAnimation.None);
-			});
+            vm.Bind(x => x.SelectedMilestone).Subscribe(x =>
+            {
+                if (Root.Count == 0)
+                    return;
+                foreach (var m in Root[0].Elements.Cast<MilestoneElement>())
+                    m.Accessory = (x != null && m.Number == x.Number) ? UITableViewCellAccessory.Checkmark : UITableViewCellAccessory.None;
+            });
+
+            vm.Bind(x => x.IsSaving).SubscribeStatus("Saving...");
         }
     }
 }

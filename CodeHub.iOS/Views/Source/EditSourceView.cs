@@ -1,149 +1,126 @@
 using System;
+using CodeHub.iOS.ViewControllers;
 using CodeHub.Core.ViewModels.Source;
-using MonoTouch.UIKit;
-using System.Drawing;
-using MonoTouch.Foundation;
+using UIKit;
+using CoreGraphics;
+using Foundation;
+using CodeHub.iOS.Utilities;
 using System.Threading.Tasks;
-using ReactiveUI;
-using Xamarin.Utilities.ViewControllers;
+using CodeHub.iOS.Services;
 
 namespace CodeHub.iOS.Views.Source
 {
-	public class EditSourceView : ViewModelDialogViewController<EditSourceViewModel>
+    public class EditSourceView : BaseViewController
     {
-		readonly ComposerView _composerView;
-	
-		public EditSourceView()
-		{
-			EdgesForExtendedLayout = UIRectEdge.None;
-			Title = "Edit";
-			_composerView = new ComposerView (ComputeComposerSize (RectangleF.Empty));
+        private readonly UITextView _textView;
 
-			View.AddSubview (_composerView);
-		}
+        public EditSourceViewModel ViewModel { get; }
+    
+        public EditSourceView()
+        {
+            ViewModel = new EditSourceViewModel();
+            EdgesForExtendedLayout = UIRectEdge.None;
+            Title = "Edit";
+
+            _textView = new UITextView {
+                Font = UIFont.FromName("Courier", UIFont.PreferredBody.PointSize),
+                SpellCheckingType = UITextSpellCheckingType.No,
+                AutocorrectionType = UITextAutocorrectionType.No,
+                AutocapitalizationType = UITextAutocapitalizationType.None,
+                AutoresizingMask = UIViewAutoresizing.FlexibleWidth | UIViewAutoresizing.FlexibleHeight 
+            };
+        }
       
-		public override void ViewDidLoad()
-		{
-			base.ViewDidLoad();
+        public override void ViewDidLoad()
+        {
+            base.ViewDidLoad();
 
-			NavigationItem.RightBarButtonItem = new UIBarButtonItem(Theme.CurrentTheme.SaveButton, UIBarButtonItemStyle.Plain, (s, e) => Commit());
-            ViewModel.WhenAnyValue(x => x.Text).Subscribe(x => _composerView.Text = x);
-		}
+            var saveButton = NavigationItem.RightBarButtonItem = new UIBarButtonItem(UIBarButtonSystemItem.Save);
 
-		private void Commit()
-		{
-			var composer = new LiteComposer { Title = "Commit Message" };
-			var vm = (EditSourceViewModel)this.ViewModel;
-			composer.Text = "Update " + vm.Path.Substring(vm.Path.LastIndexOf('/') + 1);
-            var text = _composerView.Text;
-            composer.ReturnAction += (s, e) => CommitThis(vm, composer, text, e);
-			_composerView.TextView.BecomeFirstResponder ();
-			NavigationController.PushViewController(composer, true);
-		}
+            _textView.Frame = new CGRect(CGPoint.Empty, View.Bounds.Size);
+            View.AddSubview(_textView);
+
+            OnActivation(d =>
+            {
+                d(saveButton.GetClickedObservable().Subscribe(_ => Commit()));
+                d(ViewModel.Bind(x => x.Text).Subscribe(x => {
+                    _textView.Text = x;
+                    _textView.SelectedRange = new NSRange(0, 0);
+                }));
+            });
+
+            ViewModel.LoadCommand.Execute(null);
+        }
+
+        private void Commit()
+        {
+            var content = _textView.Text;
+
+            var composer = new Composer
+            {
+                Title = "Commit Message",
+                Text = "Update " + ViewModel.Path.Substring(ViewModel.Path.LastIndexOf('/') + 1)
+            };
+
+            composer.PresentAsModal(this, text => CommitThis(content, text).ToBackground());
+        }
 
         /// <summary>
         /// Need another function because Xamarin generates an Invalid IL if used inline above
         /// </summary>
-        private async Task CommitThis(EditSourceViewModel viewModel, LiteComposer composer, string content, string message)
+        private async Task CommitThis(string content, string message)
         {
-//            try
-//            {
-//                await this.DoWorkAsync("Commiting...", () => viewModel.Commit(content, message));
-//                NavigationController.DismissViewController(true, null);
-//            }
-//            catch (Exception ex)
-//            {
-//                MonoTouch.Utilities.ShowAlert("Error", ex.Message);
-//                composer.EnableSendButton = true;
-//            }
+            try
+            {
+                UIApplication.SharedApplication.BeginIgnoringInteractionEvents();
+                await this.DoWorkAsync("Commiting...", () => ViewModel.Commit(content, message));
+                this.PresentingViewController?.DismissViewController(true, null);
+            }
+            catch (Exception ex)
+            {
+                AlertDialogService.ShowAlert("Error", ex.Message);
+            }
+            finally
+            {
+                UIApplication.SharedApplication.EndIgnoringInteractionEvents();
+            }
         }
 
-		void KeyboardWillShow (NSNotification notification)
-		{
-			var nsValue = notification.UserInfo.ObjectForKey (UIKeyboard.BoundsUserInfoKey) as NSValue;
-			if (nsValue == null) return;
-			var kbdBounds = nsValue.RectangleFValue;
-			UIView.Animate(0.25f, 0, UIViewAnimationOptions.BeginFromCurrentState | UIViewAnimationOptions.CurveEaseIn, () =>
-			_composerView.Frame = ComputeComposerSize(kbdBounds), null);
-		}
+        void KeyboardChange(NSNotification notification)
+        {
+            var nsValue = notification.UserInfo.ObjectForKey(UIKeyboard.FrameEndUserInfoKey) as NSValue;
+            if (nsValue == null) return;
 
-		void KeyboardWillHide (NSNotification notification)
-		{
-			UIView.Animate(0.2, 0, UIViewAnimationOptions.BeginFromCurrentState | UIViewAnimationOptions.CurveEaseIn, () =>
-			_composerView.Frame = ComputeComposerSize(RectangleF.Empty), null);
-		}
+            var kbdBounds = nsValue.RectangleFValue;
+            var keyboard = View.Window.ConvertRectToView(kbdBounds, View);
 
-		RectangleF ComputeComposerSize (RectangleF kbdBounds)
-		{
-			var view = View.Bounds;
-			return new RectangleF (0, 0, view.Width, view.Height-kbdBounds.Height);
-		}
+            UIView.Animate(
+                1.0f, 0, UIViewAnimationOptions.CurveEaseIn,
+                () => _textView.Frame = new CGRect(0, 0, View.Bounds.Width, keyboard.Top), null);
+        }
 
-		[Obsolete]
-		public override bool ShouldAutorotateToInterfaceOrientation(UIInterfaceOrientation toInterfaceOrientation)
-		{
-			return true;
-		}
+        NSObject _hideNotification, _showNotification;
+        public override void ViewWillAppear(bool animated)
+        {
+            base.ViewWillAppear(animated);
 
-		public override void ViewWillAppear (bool animated)
-		{
-			base.ViewWillAppear (animated);
-			NSNotificationCenter.DefaultCenter.AddObserver (new NSString("UIKeyboardWillShowNotification"), KeyboardWillShow);
-			NSNotificationCenter.DefaultCenter.AddObserver (new NSString("UIKeyboardWillHideNotification"), KeyboardWillHide);
+            _showNotification = NSNotificationCenter.DefaultCenter.AddObserver(
+                new NSString("UIKeyboardWillShowNotification"), KeyboardChange);
 
-			_composerView.TextView.BecomeFirstResponder ();
-		}
+            _hideNotification = NSNotificationCenter.DefaultCenter.AddObserver(
+                new NSString("UIKeyboardWillHideNotification"), KeyboardChange);
 
-		public override void ViewWillDisappear(bool animated)
-		{
-			base.ViewWillDisappear(animated);
-			NSNotificationCenter.DefaultCenter.RemoveObserver(this);
-		}
+            _textView.BecomeFirstResponder();
+        }
 
-		private class ComposerView : UIView 
-		{
-			internal readonly UITextView TextView;
-
-			public ComposerView (RectangleF bounds) : base (bounds)
-			{
-				TextView = new UITextView (RectangleF.Empty) {
-					Font = UIFont.SystemFontOfSize (14),
-				};
-
-				// Work around an Apple bug in the UITextView that crashes
-				if (MonoTouch.ObjCRuntime.Runtime.Arch == MonoTouch.ObjCRuntime.Arch.SIMULATOR)
-					TextView.AutocorrectionType = UITextAutocorrectionType.No;
-
-				AddSubview (TextView);
-			}
-
-
-			internal void Reset (string text)
-			{
-				TextView.Text = text;
-			}
-
-			public override void LayoutSubviews ()
-			{
-				Resize (Bounds);
-			}
-
-			void Resize (RectangleF bounds)
-			{
-				TextView.Frame = new RectangleF (0, 0, bounds.Width, bounds.Height);
-			}
-
-			public string Text { 
-				get {
-					return TextView.Text;
-				}
-				set {
-					TextView.Text = value;
-					TextView.SelectedRange = new NSRange(0, 0);
-				}
-			}
-		}
-
+        public override void ViewWillDisappear(bool animated)
+        {
+            base.ViewWillDisappear(animated);
+            if (_hideNotification != null)
+                NSNotificationCenter.DefaultCenter.RemoveObserver(_hideNotification);
+            if (_showNotification != null)
+                NSNotificationCenter.DefaultCenter.RemoveObserver(_showNotification);
+        }
     }
 }
 

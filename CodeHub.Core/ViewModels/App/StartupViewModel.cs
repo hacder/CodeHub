@@ -1,103 +1,143 @@
-﻿using System;
+using System;
+using CodeHub.Core.Services;
 using System.Linq;
+using System.Windows.Input;
+using Dumb = MvvmCross.Core.ViewModels;
 using System.Threading.Tasks;
 using ReactiveUI;
-using Xamarin.Utilities.Core.ViewModels;
-using CodeHub.Core.Services;
-using CodeHub.Core.ViewModels.Accounts;
+using System.Reactive.Threading.Tasks;
+using System.Reactive;
 
 namespace CodeHub.Core.ViewModels.App
 {
-    public class StartupViewModel : BaseViewModel, ILoadableViewModel
+    public class StartupViewModel : BaseViewModel
     {
-        private readonly IAccountsService _accountsService;
-        private readonly ILoginService _loginService;
-
-        public IReactiveCommand<object> GoToAccountsCommand { get; private set; }
-
-        public IReactiveCommand<object> GoToNewUserCommand { get; private set; }
-
-        public IReactiveCommand<object> GoToMainCommand { get; private set; }
-
-        public IReactiveCommand BecomeActiveWindowCommand { get; private set; }
-
-        public IReactiveCommand LoadCommand { get; private set; }
-
         private bool _isLoggingIn;
+        private string _status;
+        private Uri _imageUrl;
+        private readonly IApplicationService _applicationService;
+        private readonly IAccountsService _accountsService;
+
         public bool IsLoggingIn
         {
             get { return _isLoggingIn; }
-            protected set { this.RaiseAndSetIfChanged(ref _isLoggingIn, value); }
+            private set { this.RaiseAndSetIfChanged(ref _isLoggingIn, value); }
         }
 
-        private string _status;
         public string Status
         {
             get { return _status; }
-            protected set { this.RaiseAndSetIfChanged(ref _status, value); }
+            private set { this.RaiseAndSetIfChanged(ref _status, value); }
         }
 
-        private Uri _imageUrl;
         public Uri ImageUrl
         {
             get { return _imageUrl; }
-            protected set { this.RaiseAndSetIfChanged(ref _imageUrl, value); }
+            private set { this.RaiseAndSetIfChanged(ref _imageUrl, value); }
         }
 
-        public StartupViewModel(IAccountsService accountsService, ILoginService loginService)
+        public ICommand StartupCommand
         {
-            _accountsService = accountsService;
-            _loginService = loginService;
-
-            GoToMainCommand = ReactiveCommand.Create().WithSubscription(_ => ShowViewModel(CreateViewModel<MenuViewModel>()));
-            GoToAccountsCommand = ReactiveCommand.Create().WithSubscription(_ => ShowViewModel(CreateViewModel<AccountsViewModel>()));
-            GoToNewUserCommand = ReactiveCommand.Create().WithSubscription(_ => ShowViewModel(CreateViewModel<NewAccountViewModel>()));
-            BecomeActiveWindowCommand = ReactiveCommand.Create();
-
-            LoadCommand = ReactiveCommand.CreateAsyncTask(x => Load());
+            get { return new Dumb.MvxAsyncCommand(Startup); }
         }
 
-        private void GoToAccountsOrNewUser()
+        public Data.Account Account => _applicationService.Account;
+
+        public ReactiveCommand<Unit, Unit> GoToMenu { get; } = ReactiveCommand.Create(() => { });
+
+        public ReactiveCommand<Unit, Unit> GoToAccounts { get; } = ReactiveCommand.Create(() => { });
+
+        public ReactiveCommand<Unit, Unit> GoToNewAccount { get; } = ReactiveCommand.Create(() => { });
+
+        public StartupViewModel(
+            IApplicationService applicationService = null,
+            IAccountsService accountsService = null)
         {
-            if (_accountsService.Any())
-                GoToAccountsCommand.ExecuteIfCan();
-            else
-                GoToNewUserCommand.ExecuteIfCan();
+            _applicationService = applicationService ?? GetService<IApplicationService>();
+            _accountsService = accountsService ?? GetService<IAccountsService>();
         }
 
-        private async Task Load()
+        protected async Task Startup()
         {
-            var account = _accountsService.GetDefault();
+            var accounts = (await _accountsService.GetAccounts()).ToList();
+            if (!accounts.Any())
+            {
+                GoToNewAccount.ExecuteNow();
+                return;
+            }
 
-            // Account no longer exists
+            var account = await _accountsService.GetActiveAccount();
             if (account == null)
             {
-                GoToAccountsOrNewUser();
+                GoToAccounts.ExecuteNow();
+                return;
             }
-            else
+
+            var isEnterprise = account.IsEnterprise || !string.IsNullOrEmpty(account.Password);
+
+            //Lets login!
+            try
             {
-                try
-                {
-                    Status = string.Format("Logging in {0}", account.Username);
+                ImageUrl = null;
+                Status = null;
+                IsLoggingIn = true;
 
-                    Uri avatarUri;
-                    if (Uri.TryCreate(account.AvatarUrl, UriKind.Absolute, out avatarUri))
-                        ImageUrl = avatarUri;
+                Uri accountAvatarUri = null;
+                Uri.TryCreate(account.AvatarUrl, UriKind.Absolute, out accountAvatarUri);
+                ImageUrl = accountAvatarUri;
+                Status = "Logging in as " + account.Username;
 
-                    IsLoggingIn = true;
-                    await _loginService.LoginAccount(account);
-                    _accountsService.ActiveAccount = account;
-                    GoToMainCommand.ExecuteIfCan();
-                }
-                catch
+                await _applicationService.LoginAccount(account);
+
+                if (!isEnterprise)
+                    StarOrWatch();
+
+                GoToMenu.ExecuteNow();
+            }
+            catch (Octokit.AuthorizationException e)
+            {
+                DisplayAlertAsync("The credentials for the selected account are not valid. " + e.Message)
+                    .ToObservable()
+                    .BindCommand(GoToAccounts);
+            }
+            catch (Exception e)
+            {
+                DisplayAlert(e.Message);
+                GoToAccounts.ExecuteNow();
+            }
+            finally
+            {
+                IsLoggingIn = false;
+            }
+        }
+
+        private void StarOrWatch()
+        {
+            if (Settings.ShouldStar)
+            {
+                Settings.ShouldStar = false;
+
+                _applicationService
+                    .GitHubClient.Activity.Starring
+                    .StarRepo("codehubapp", "codehub")
+                    .ToBackground();
+            }
+
+            if (Settings.ShouldWatch)
+            {
+                Settings.ShouldWatch = false;
+
+                var subscription = new Octokit.NewSubscription
                 {
-                    GoToAccountsCommand.ExecuteIfCan();
-                }
-                finally
-                {
-                    IsLoggingIn = false;
-                }
+                    Subscribed = true
+                };
+
+                _applicationService
+                    .GitHubClient.Activity.Watching
+                    .WatchRepo("codehubapp", "codehub", subscription)
+                    .ToBackground();
             }
         }
     }
 }
+

@@ -1,19 +1,27 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
-using CodeHub.Core.Services;
-using GitHubSharp.Models;
-using System.Linq;
+using System.Threading.Tasks;
+using CodeHub.Core.Messages;
 using ReactiveUI;
-using Xamarin.Utilities.Core.ViewModels;
+using System.Reactive;
+using CodeHub.Core.Services;
+using Octokit;
 
 namespace CodeHub.Core.ViewModels.Gists
 {
-    public class GistCreateViewModel : BaseViewModel
+    public class GistCreateViewModel : BaseViewModel 
     {
-        private readonly IApplicationService _applicationService;
+        private readonly IMessageService _messageService;
         private string _description;
         private bool _public;
-        private IDictionary<string, string> _files;
+        private IDictionary<string, string> _files = new Dictionary<string, string>();
+        private bool _saving;
+
+        public bool IsSaving
+        {
+            get { return _saving; }
+            private set { this.RaiseAndSetIfChanged(ref _saving, value); }
+        }
 
         public string Description
         {
@@ -33,38 +41,45 @@ namespace CodeHub.Core.ViewModels.Gists
             set { this.RaiseAndSetIfChanged(ref _files, value); }
         }
 
-        private GistModel _createdGist;
-        public GistModel CreatedGist
+        public ReactiveCommand<Unit, Gist> SaveCommand { get; }
+
+        public ReactiveCommand<Unit, Unit> CancelCommand { get; }
+
+
+        public GistCreateViewModel(IMessageService messageService = null)
         {
-            get { return _createdGist; }
-            private set { this.RaiseAndSetIfChanged(ref _createdGist, value); }
+            _messageService = messageService ?? GetService<IMessageService>();
+
+            CancelCommand = ReactiveCommand.Create(() => { });
+            SaveCommand = ReactiveCommand.CreateFromTask(Save);
+            SaveCommand.ThrownExceptions.Subscribe(x => DisplayAlert(x.Message));
         }
 
-        public IReactiveCommand SaveCommand { get; private set; }
-
-        public GistCreateViewModel(IApplicationService applicationService)
+        private async Task<Gist> Save()
         {
-            _applicationService = applicationService;
+            if (_files.Count == 0)
+                throw new Exception("You cannot create a Gist without atleast one file! Please correct and try again.");
 
-            Title = "Create Gist";
-            Files = new Dictionary<string, string>();
-
-            SaveCommand = ReactiveCommand.CreateAsyncTask(async t =>
+            try
             {
-                if (_files == null || _files.Count == 0)
-                    throw new Exception("You cannot create a Gist without atleast one file! Please correct and try again.");
-
-                var createGist = new GistCreateModel
+                var newGist = new NewGist()
                 {
-                    Description = Description,
-                    Public = Public,
-                    Files = Files.ToDictionary(x => x.Key, x => new GistCreateModel.File { Content = x.Value })
+                    Description = Description ?? string.Empty,
+                    Public = Public
                 };
 
-                var newGist = (await _applicationService.Client.ExecuteAsync(_applicationService.Client.AuthenticatedUser.Gists.CreateGist(createGist))).Data;
-                CreatedGist = newGist;
-                DismissCommand.ExecuteIfCan();
-            });
+                foreach (var kv in Files)
+                    newGist.Files.Add(kv.Key, kv.Value);
+
+                IsSaving = true;
+                var gist = await this.GetApplication().GitHubClient.Gist.Create(newGist);
+                _messageService.Send(new GistAddMessage(gist));
+                return gist;
+            }
+            finally
+            {
+                IsSaving = false;
+            }
         }
     }
 }

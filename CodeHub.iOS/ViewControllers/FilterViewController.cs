@@ -1,22 +1,29 @@
 using System;
 using System.Linq;
-using MonoTouch.UIKit;
-using Xamarin.Utilities.ViewControllers;
-using Xamarin.Utilities.DialogElements;
-using Xamarin.Utilities.Core.ViewModels;
+using CodeHub.iOS.ViewControllers;
+using UIKit;
+using CodeHub.iOS.DialogElements;
+using Humanizer;
 
 namespace CodeHub.iOS.ViewControllers
 {
-    public abstract class FilterViewController<TViewModel> : ViewModelDialogViewController<TViewModel> where TViewModel : class, IBaseViewModel
+    public abstract class FilterViewController : DialogViewController
     {
         protected FilterViewController()
+            : base(UITableViewStyle.Grouped)
         {
             Title = "Filter & Sort";
-            NavigationItem.LeftBarButtonItem = new UIBarButtonItem(Images.Cancel, UIBarButtonItemStyle.Plain, (s, e) => 
-                DismissViewController(true, null));
-			NavigationItem.RightBarButtonItem = new UIBarButtonItem(Theme.CurrentTheme.SaveButton, UIBarButtonItemStyle.Plain, (s, e) => {
-                ApplyButtonPressed();
-                DismissViewController(true, null); 
+
+            var cancel = NavigationItem.LeftBarButtonItem = new UIBarButtonItem(UIBarButtonSystemItem.Cancel);
+            var save = NavigationItem.RightBarButtonItem = new UIBarButtonItem(UIBarButtonSystemItem.Save);
+
+            OnActivation(d =>
+            {
+                d(cancel.GetClickedObservable().Subscribe(_ => DismissViewController(true, null)));
+                d(save.GetClickedObservable().Subscribe(_ => {
+                    ApplyButtonPressed();
+                    DismissViewController(true, null); 
+                }));
             });
         }
 
@@ -33,7 +40,7 @@ namespace CodeHub.iOS.ViewControllers
             TableView.ReloadData();
         }
 
-        public class EnumChoiceElement<T> : StyledStringElement where T : struct, IConvertible
+        public class EnumChoiceElement<T> : StringElement where T : struct, IConvertible
         {
             private T _value;
 
@@ -43,7 +50,7 @@ namespace CodeHub.iOS.ViewControllers
                 set
                 {
                     _value = value;
-                    base.Value = ((Enum)Enum.ToObject(typeof(T), value)).Description();
+                    base.Value = ((Enum)Enum.ToObject(typeof(T), value)).Humanize();
                 }
             }
 
@@ -59,28 +66,35 @@ namespace CodeHub.iOS.ViewControllers
         {
             var element = new EnumChoiceElement<T>(title, value);
 
-            element.Tapped += () =>
+            element.Clicked.Subscribe(_ =>
             {
-                var ctrl = new DialogViewController {Title = title};
+                var ctrl = new DialogViewController(UITableViewStyle.Grouped);
+                ctrl.Title = title;
+
                 var sec = new Section();
-                foreach (var x in Enum.GetValues(typeof(T)).Cast<System.Enum>())
+                foreach (var x in Enum.GetValues(typeof(T)).Cast<Enum>())
                 {
-                    sec.Add(new StyledStringElement(x.Description(), () => { 
-                        element.Value = (T)Enum.ToObject(typeof(T), x); 
-                        NavigationController.PopViewControllerAnimated(true);
-                    }) { 
+                    var e = new StringElement(x.Humanize())
+                    { 
                         Accessory = object.Equals(x, element.Value) ? 
-                            MonoTouch.UIKit.UITableViewCellAccessory.Checkmark : MonoTouch.UIKit.UITableViewCellAccessory.None 
+                            UITableViewCellAccessory.Checkmark : UITableViewCellAccessory.None 
+                    };
+                    e.Clicked.Subscribe(__ =>
+                    { 
+                        element.Value = (T)Enum.ToObject(typeof(T), x); 
+                        NavigationController.PopViewController(true);
                     });
+
+                    sec.Add(e);
                 }
                 ctrl.Root.Reset(sec);
                 NavigationController.PushViewController(ctrl, true);
-            };
+            });
             
             return element;
         }
 
-        public class MultipleChoiceElement<T> : StyledStringElement
+        public class MultipleChoiceElement<T> : StringElement
         {
             public T Obj;
             public MultipleChoiceElement(string title, T obj)
@@ -91,20 +105,20 @@ namespace CodeHub.iOS.ViewControllers
             }
         }
 
-//        protected MultipleChoiceElement<T> CreateMultipleChoiceElement<T>(string title, T o)
-//        {
-//            var element = new MultipleChoiceElement<T>(title, o);
-//            element.Tapped += () =>
-//            {
-//                var en = new MultipleChoiceViewController(element.Caption, o);
-//                en.ViewDisappearing += (sender, e) => {
-//                    element.Value = CreateCaptionForMultipleChoice(o);
-//                };
-//                NavigationController.PushViewController(en, true);
-//            };
-//
-//            return element;
-//        }
+        protected MultipleChoiceElement<T> CreateMultipleChoiceElement<T>(string title, T o)
+        {
+            var element = new MultipleChoiceElement<T>(title, o);
+            element.Clicked.Subscribe(_ =>
+            {
+                var en = new MultipleChoiceViewController(element.Caption, o);
+                en.Disappearing.Subscribe(__ => {
+                    element.Value = CreateCaptionForMultipleChoice(o);
+                });
+                NavigationController.PushViewController(en, true);
+            });
+
+            return element;
+        }
 
         private static string CreateCaptionForMultipleChoice<T>(T o)
         {

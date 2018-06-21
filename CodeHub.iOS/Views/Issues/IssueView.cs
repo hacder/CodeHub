@@ -1,96 +1,151 @@
 using System;
-using System.Reactive.Linq;
 using CodeHub.Core.ViewModels.Issues;
-using MonoTouch.UIKit;
+using UIKit;
+using CodeHub.iOS.ViewControllers;
+using CodeHub.iOS.Utilities;
+using CodeHub.iOS.DialogElements;
 using System.Linq;
 using System.Collections.Generic;
+using Humanizer;
+using CodeHub.iOS.ViewControllers.Repositories;
+using CodeHub.iOS.Services;
+using System.Reactive.Linq;
 using ReactiveUI;
-using Xamarin.Utilities.ViewControllers;
-using Xamarin.Utilities.DialogElements;
+using CodeHub.WebViews;
+using System.Threading.Tasks;
+using CodeHub.Core.Services;
+using Splat;
+using System.Reactive;
 
 namespace CodeHub.iOS.Views.Issues
 {
-    public class IssueView : ViewModelPrettyDialogViewController<IssueViewModel>
+    public class IssueView : PrettyDialogViewController
     {
-        protected WebElement _descriptionElement;
-        protected WebElement _commentsElement;
-        protected StyledStringElement _milestoneElement;
-        protected StyledStringElement _assigneeElement;
-        protected StyledStringElement _labelsElement;
-        protected StyledStringElement _addCommentElement;
-        private UIActionSheet _actionSheet;
+        private readonly IMarkdownService _markdownService = Locator.Current.GetService<IMarkdownService>();
+        private readonly HtmlElement _descriptionElement = new HtmlElement("description");
+        private readonly HtmlElement _commentsElement = new HtmlElement("comments");
+        private StringElement _milestoneElement;
+        private StringElement _assigneeElement;
+        private StringElement _labelsElement;
+        private StringElement _addCommentElement;
+        private SplitButtonElement _split = new SplitButtonElement();
+        private SplitButtonElement.Button _splitButton1;
+        private SplitButtonElement.Button _splitButton2;
+
+        public new IssueViewModel ViewModel
+        {
+            get { return (IssueViewModel) base.ViewModel; }
+            set { base.ViewModel = value; }
+        }
+
+        public IssueView(string owner, string repository, int id)
+            : this()
+        {
+            ViewModel = new IssueViewModel();
+            ViewModel.Init(new IssueViewModel.NavObject { Username = owner, Repository = repository, Id = id });
+        }
+
+        public IssueView()
+        {
+        }
+
+        protected override void DidScroll(CoreGraphics.CGPoint p)
+        {
+            base.DidScroll(p);
+
+            _descriptionElement.SetLayout();
+            _commentsElement.SetLayout();
+        }
 
         public override void ViewDidLoad()
         {
             base.ViewDidLoad();
 
-            var content = System.IO.File.ReadAllText("WebCell/body.html", System.Text.Encoding.UTF8);
-            _descriptionElement = new WebElement("body");
-            _descriptionElement.UrlRequested = ViewModel.GoToUrlCommand.ExecuteIfCan;
-            //_descriptionElement.HeightChanged = x => Render();
+            _splitButton1 = _split.AddButton("Comments", "-");
+            _splitButton2 = _split.AddButton("Participants", "-");
 
-            var content2 = System.IO.File.ReadAllText("WebCell/comments.html", System.Text.Encoding.UTF8);
-            _commentsElement = new WebElement("comments");
-            _commentsElement.UrlRequested = ViewModel.GoToUrlCommand.ExecuteIfCan;
-            //_commentsElement.HeightChanged = x => Render();
+            Title = "Issue #" + ViewModel.Id;
+            HeaderView.SetImage(null, Images.Avatar);
+            HeaderView.Text = Title;
 
-            _milestoneElement = new StyledStringElement("Milestone", "No Milestone", UITableViewCellStyle.Value1) {Image = Images.Milestone, Accessory = UITableViewCellAccessory.DisclosureIndicator};
-            _milestoneElement.Tapped += () => ViewModel.GoToMilestoneCommand.Execute(null);
+            Appeared.Take(1)
+                .Select(_ => Observable.Timer(TimeSpan.FromSeconds(0.2f)))
+                .Switch()
+                .ObserveOn(RxApp.MainThreadScheduler)
+                .Select(_ => ViewModel.Bind(x => x.IsClosed, true).Where(x => x.HasValue).Select(x => x.Value))
+                .Switch()
+                .Subscribe(x => 
+                {
+                    HeaderView.SubImageView.TintColor = x ? UIColor.FromRGB(0xbd, 0x2c, 0) : UIColor.FromRGB(0x6c, 0xc6, 0x44);
+                    HeaderView.SetSubImage((x ? Octicon.IssueClosed :Octicon.IssueOpened).ToImage());
+                });
 
-            _assigneeElement = new StyledStringElement("Assigned", "Unassigned", UITableViewCellStyle.Value1) {Image = Images.Person, Accessory = UITableViewCellAccessory.DisclosureIndicator };
-            _assigneeElement.Tapped += () => ViewModel.GoToAssigneeCommand.Execute(null);
+            _milestoneElement = new StringElement("Milestone", "No Milestone", UITableViewCellStyle.Value1) {Image = Octicon.Milestone.ToImage() };
+            _assigneeElement = new StringElement("Assigned", "Unassigned", UITableViewCellStyle.Value1) {Image = Octicon.Person.ToImage() };
+            _labelsElement = new StringElement("Labels", "None", UITableViewCellStyle.Value1) {Image = Octicon.Tag.ToImage() };
+            _addCommentElement = new StringElement("Add Comment") { Image = Octicon.Pencil.ToImage() };
 
-            _labelsElement = new StyledStringElement("Labels", "None", UITableViewCellStyle.Value1) {Image = Images.Tag, Accessory = UITableViewCellAccessory.DisclosureIndicator};
-            _labelsElement.Tapped += () => ViewModel.GoToLabelsCommand.Execute(null);
+            var actionButton = new UIBarButtonItem(UIBarButtonSystemItem.Action) { Enabled = false };
+            NavigationItem.RightBarButtonItem = actionButton;
 
-            _addCommentElement = new StyledStringElement("Add Comment") { Image = Images.Pencil };
-            _addCommentElement.Tapped += AddCommentTapped;
+            ViewModel.Bind(x => x.IsModifying).SubscribeStatus("Loading...");
 
-            NavigationItem.RightBarButtonItem = new UIBarButtonItem(UIBarButtonSystemItem.Action, (s, e) => ShowExtraMenu());
-            NavigationItem.RightBarButtonItem.EnableIfExecutable(ViewModel.LoadCommand.IsExecuting.Select(x => !x));
-
-            ViewModel.WhenAnyValue(x => x.Issue).Where(x => x != null).Subscribe(x =>
+            ViewModel.Bind(x => x.Issue).Subscribe(x =>
             {
                 _assigneeElement.Value = x.Assignee != null ? x.Assignee.Login : "Unassigned";
                 _milestoneElement.Value = x.Milestone != null ? x.Milestone.Title : "No Milestone";
                 _labelsElement.Value = x.Labels.Count == 0 ? "None" : string.Join(", ", x.Labels.Select(i => i.Name));
-                _descriptionElement.Value = ViewModel.MarkdownDescription;
+
                 HeaderView.Text = x.Title;
-                HeaderView.SubText = "Updated " + x.UpdatedAt.ToDaysAgo();
-                HeaderView.ImageUri = x.User.AvatarUrl;
+                HeaderView.SubText = "Updated " + x.UpdatedAt.Humanize();
+                HeaderView.SetImage(x.User?.AvatarUrl, Images.Avatar);
+                RefreshHeaderView();
+
                 Render();
             });
-//
-//            ViewModel.BindCollection(x => x.Comments, (e) => RenderComments());
-//            ViewModel.BindCollection(x => x.Events, (e) => RenderComments());
-        }
 
-        public override void ViewWillAppear(bool animated)
-        {
-            base.ViewWillAppear(animated);
-            Title = "Issue #" + ViewModel.Id;
-        }
+            ViewModel.Bind(x => x.MarkdownDescription).Subscribe(description =>
+            {
+                var model = new MarkdownModel(description, (int)UIFont.PreferredSubheadline.PointSize, true);
+                var markdown = new MarkdownWebView { Model = model };
+                var html = markdown.GenerateString();
+                _descriptionElement.SetValue(string.IsNullOrEmpty(description) ? null : html);
+                Render();
+            });
 
-        private IEnumerable<CommentModel> CreateCommentList()
-        {
-//            var items = ViewModel.Comments.Select(x => new CommentModel 
-//            { 
-//                AvatarUrl = x.User.AvatarUrl, 
-//                Login = x.User.Login, 
-//                CreatedAt = x.CreatedAt,
-//                Body = ViewModel.ConvertToMarkdown(x.Body)
-//            })
-//                .Concat(ViewModel.Events.Select(x => new CommentModel
-//            {
-//                AvatarUrl = x.Actor.AvatarUrl, 
-//                Login = x.Actor.Login, 
-//                CreatedAt = x.CreatedAt,
-//                Body = CreateEventBody(x.Event, x.CommitId)
-//            })
-//                .Where(x => !string.IsNullOrEmpty(x.Body)));
-//
-//            return items.OrderBy(x => x.CreatedAt);
-            return null;
+            ViewModel
+                .Bind(x => x.Comments)
+                .Select(_ => Unit.Default)
+                .Merge(ViewModel.Bind(x => x.Events).Select(_ => Unit.Default))
+                .Subscribe(_ => RenderComments().ToBackground());
+
+            ViewModel
+                .Bind(x => x.Participants)
+                .Subscribe(x => _splitButton2.Text = x.HasValue ? x.Value.ToString() : "-");
+
+            ViewModel
+                .Bind(x => x.ShouldShowPro)
+                .Where(x => x)
+                .Subscribe(x => this.ShowPrivateView());
+
+            OnActivation(d =>
+            {
+                d(_milestoneElement.Clicked.BindCommand(ViewModel.GoToMilestoneCommand));
+                d(_assigneeElement.Clicked.BindCommand(ViewModel.GoToAssigneeCommand));
+                d(_labelsElement.Clicked.BindCommand(ViewModel.GoToLabelsCommand));
+                d(_addCommentElement.Clicked.Subscribe(_ => AddCommentTapped()));
+                d(_descriptionElement.UrlRequested.BindCommand(ViewModel.GoToUrlCommand));
+                d(_commentsElement.UrlRequested.BindCommand(ViewModel.GoToUrlCommand));
+                d(actionButton.GetClickedObservable().Subscribe(ShowExtraMenu));
+                d(HeaderView.Clicked.BindCommand(ViewModel.GoToOwner));
+
+                d(ViewModel.Bind(x => x.IsCollaborator, true).Subscribe(x => {
+                    foreach (var i in new [] { _assigneeElement, _milestoneElement, _labelsElement })
+                        i.Accessory = x ? UITableViewCellAccessory.DisclosureIndicator : UITableViewCellAccessory.None;
+                }));
+
+                d(ViewModel.Bind(x => x.IsLoading).Subscribe(x => actionButton.Enabled = !x));
+            });
         }
 
         private static string CreateEventBody(string eventType, string commitId)
@@ -113,22 +168,34 @@ namespace CodeHub.iOS.Views.Issues
             return string.Empty;
         }
 
-        public void RenderComments()
+        public async Task RenderComments()
         {
-//            var s = Cirrious.CrossCore.Mvx.Resolve<CodeFramework.Core.Services.IJsonSerializationService>();
-//            var comments = CreateCommentList().Select(x => new {
-//                avatarUrl = x.AvatarUrl,
-//                login = x.Login,
-//                created_at = x.CreatedAt.ToDaysAgo(),
-//                body = x.Body
-//            });
-//            var data = s.Serialize(comments);
-//
-//            InvokeOnMainThread(() => {
-//                _commentsElement.Value = !comments.Any() ? string.Empty : data;
-//                if (_commentsElement.GetImmediateRootElement() == null)
-//                    Render();
-//            });
+            var comments = new List<Comment>();
+
+            foreach (var x in ViewModel.Comments)
+            {
+                var body = await _markdownService.Convert(x.Body);
+                comments.Add(new Comment(x.User.AvatarUrl, x.User.Login, body, x.CreatedAt));
+            }
+
+            var events = ViewModel
+                .Events
+                .Select(x => new Comment(x.Actor.AvatarUrl, x.Actor.Login, CreateEventBody(x.Event.StringValue, x.CommitId), x.CreatedAt));
+
+            var items = comments
+                .Concat(events)
+                .Where(x => !string.IsNullOrEmpty(x.Body))
+                .OrderBy(x => x.Date)
+                .ToList();
+            
+            var commentModel = new CommentsModel(comments, (int)UIFont.PreferredSubheadline.PointSize);
+            var razorView = new CommentsWebView { Model = commentModel };
+            var html = razorView.GenerateString();
+
+            InvokeOnMainThread(() => {
+                _commentsElement.SetValue(!comments.Any() ? null : html);
+                Render();
+            });
         }
 
         protected virtual void Render()
@@ -137,86 +204,102 @@ namespace CodeHub.iOS.Views.Issues
             if (ViewModel.Issue == null)
                 return;
 
-            var sections = new List<Section>();
-            sections.Add(new Section(HeaderView));
+            _splitButton1.Text = ViewModel.Issue.Comments.ToString();
+
+            ICollection<Section> sections = new LinkedList<Section>();
+            sections.Add(new Section { _split });
 
             var secDetails = new Section();
-//            if (!string.IsNullOrEmpty(_descriptionElement.Value))
-//                secDetails.Add(_descriptionElement);
+            if (_descriptionElement.HasValue)
+                secDetails.Add(_descriptionElement);
 
             secDetails.Add(_assigneeElement);
             secDetails.Add(_milestoneElement);
             secDetails.Add(_labelsElement);
             sections.Add(secDetails);
 
-//            if (!string.IsNullOrEmpty(_commentsElement.Value))
-//                root.Add(new Section { _commentsElement });
+            var commentsSection = new Section();
+            if (_commentsElement.HasValue)
+                commentsSection.Add(_commentsElement);
+            commentsSection.Add(_addCommentElement);
+            sections.Add(commentsSection);
 
-            sections.Add(new Section { _addCommentElement });
             Root.Reset(sections);
         }
 
         void AddCommentTapped()
         {
-//            var composer = new MarkdownComposerViewController();
-//            composer.NewComment(this, async (text) => {
-//
-//                var hud = this.CreateHud();
-//                hud.Show("Posting Comment...");
-//                if (await ViewModel.AddComment(text))
-//                    composer.CloseComposer();
-//                hud.Hide();
-//                composer.EnableSendButton = true;
-//            });
+            var composer = new MarkdownComposerViewController();
+            composer.PresentAsModal(this, async text =>
+            {
+                UIApplication.SharedApplication.BeginIgnoringInteractionEvents();
+
+                var hud = this.CreateHud();
+                hud.Show("Posting Comment...");
+                if (await ViewModel.AddComment(text))
+                    this.DismissViewController(true, null);
+                hud.Hide();
+
+                UIApplication.SharedApplication.EndIgnoringInteractionEvents();
+            });
         }
 
         public override UIView InputAccessoryView
         {
             get
             {
-                var u = new UIView(new System.Drawing.RectangleF(0, 0, 320f, 27)) { BackgroundColor = UIColor.White };
+                var u = new UIView(new CoreGraphics.CGRect(0, 0, 320f, 27)) { BackgroundColor = UIColor.White };
                 return u;
             }
         }
 
-
-        private void ShowExtraMenu()
+        private void ShowExtraMenu(UIBarButtonItem item)
         {
             if (ViewModel.Issue == null)
                 return;
 
-            _actionSheet = new UIActionSheet(Title);
-            var editButton = _actionSheet.AddButton("Edit");
-            var openButton = _actionSheet.AddButton(ViewModel.Issue.State == "open" ? "Close" : "Open");
-            var commentButton = _actionSheet.AddButton("Comment");
-            var shareButton = _actionSheet.AddButton("Share");
-            var showButton = _actionSheet.AddButton("Show in GitHub");
-            var cancelButton = _actionSheet.AddButton("Cancel");
-            _actionSheet.CancelButtonIndex = cancelButton;
-            _actionSheet.DismissWithClickedButtonIndex(cancelButton, true);
-            _actionSheet.Clicked += (s, e) => {
-                if (e.ButtonIndex == editButton)
-                    ViewModel.GoToEditCommand.Execute(null);
-                else if (e.ButtonIndex == openButton)
-                    ViewModel.ToggleStateCommand.Execute(null);
-                else if (e.ButtonIndex == shareButton)
-                    ViewModel.ShareCommand.Execute(ViewModel.Issue.HtmlUrl);
-                else if (e.ButtonIndex == showButton)
-                    ViewModel.GoToUrlCommand.Execute(ViewModel.Issue.HtmlUrl);
-                else if (e.ButtonIndex == commentButton)
-                    AddCommentTapped();
-                _actionSheet = null;
+            var issue = ViewModel.Issue;
+
+            var sheet = new UIActionSheet();
+            var editButton = ViewModel.IsCollaborator ? sheet.AddButton("Edit") : -1;
+            var openButton = ViewModel.IsCollaborator ? sheet.AddButton(ViewModel.Issue.State == "open" ? "Close" : "Open") : -1;
+            var commentButton = sheet.AddButton("Comment");
+            var shareButton = sheet.AddButton("Share");
+            var showButton = sheet.AddButton("Show in GitHub");
+            var cancelButton = sheet.AddButton("Cancel");
+            sheet.CancelButtonIndex = cancelButton;
+            sheet.Dismissed += (s, e) =>
+            {
+                BeginInvokeOnMainThread(() =>
+                {
+                    if (e.ButtonIndex == editButton)
+                        ViewModel.GoToEditCommand.Execute(null);
+                    else if (e.ButtonIndex == openButton)
+                        ViewModel.ToggleStateCommand.Execute(null);
+                    else if (e.ButtonIndex == shareButton)
+                    {
+                        AlertDialogService.Share(
+                            Title,
+                            issue.Body,
+                            issue.HtmlUrl,
+                            NavigationItem.RightBarButtonItem);
+                    }
+                    else if (e.ButtonIndex == showButton)
+                        ViewModel.GoToUrlCommand.Execute(ViewModel.Issue.HtmlUrl);
+                    else if (e.ButtonIndex == commentButton)
+                        AddCommentTapped();
+                });
+
+                sheet.Dispose();
             };
 
-            _actionSheet.ShowInView(View);
+            sheet.ShowFrom(item, true);
         }
 
-        private class CommentModel
+        public override void DidRotate(UIInterfaceOrientation fromInterfaceOrientation)
         {
-            public string AvatarUrl { get; set; }
-            public string Login { get; set; }
-            public DateTimeOffset CreatedAt { get; set; }
-            public string Body { get; set; }
+            Task.WhenAll(_descriptionElement.ForceResize(), _commentsElement.ForceResize())
+                .ToBackground(() => Root.Reload(new [] { _commentsElement, _descriptionElement }));
         }
     }
 }

@@ -1,27 +1,16 @@
 using System.Threading.Tasks;
-using System.Collections.Generic;
 
 namespace CodeHub.Core.Services
 {
     public interface IFeaturesService
     {
-        bool IsPushNotificationsActivated { get; set; }
+        bool IsProEnabled { get; }
 
-        bool IsEnterpriseSupportActivated { get; set; }
+        void ActivateProDirect();
 
-        void Activate(string id);
+        Task ActivatePro();
 
-        bool IsActivated(string id);
-
-        Task<IEnumerable<string>> GetAvailableFeatureIds();
-
-        Task PromptPushNotificationFeature();
-    }
-
-    public static class FeatureIds
-    {
-        public const string PushNotifications = "com.dillonbuchanan.codehub.push";
-        public const string EnterpriseSupport = "com.dillonbuchanan.codehub.enterprise_support";
+        Task RestorePro();
     }
 }
 

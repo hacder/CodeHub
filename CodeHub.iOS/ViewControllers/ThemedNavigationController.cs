@@ -1,5 +1,4 @@
-﻿using MonoTouch.UIKit;
-using System;
+﻿using UIKit;
 
 namespace CodeHub.iOS.ViewControllers
 {
@@ -8,6 +7,8 @@ namespace CodeHub.iOS.ViewControllers
         public ThemedNavigationController(UIViewController ctrl)
             : base(ctrl)
         {
+            ModalPresentationStyle = ctrl.ModalPresentationStyle;
+            ModalTransitionStyle = ctrl.ModalTransitionStyle;
         }
     }
 }

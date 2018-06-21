@@ -1,49 +1,56 @@
 using System;
 using System.Linq;
-using System.Reactive.Linq;
+using CodeHub.iOS.DialogElements;
+using CodeHub.iOS.ViewControllers;
 using CodeHub.Core.ViewModels.Issues;
-using MonoTouch.UIKit;
-using ReactiveUI;
-using Xamarin.Utilities.ViewControllers;
-using CodeHub.iOS.Elements;
+using UIKit;
+using CodeHub.iOS.Utilities;
+using CodeHub.Core.Utilities;
 
 namespace CodeHub.iOS.Views.Issues
 {
-    public class IssueAssignedToView : ViewModelCollectionViewController<IssueAssignedToViewModel>
+    public class IssueAssignedToView : ViewModelCollectionDrivenDialogViewController
     {
+        public IssueAssignedToView()
+        {
+            Title = "Assignees";
+            EmptyView = new Lazy<UIView>(() =>
+                new EmptyListView(Octicon.Person.ToEmptyListImage(), "There are no assignees."));
+        }
 
         public override void ViewDidLoad()
         {
-            Title = "Assignees";
-            //NoItemsText = "No Assignees";
-
             base.ViewDidLoad();
 
-            this.BindList(ViewModel.Users, x =>
-			{
-				var el = new UserElement(x.Login, string.Empty, string.Empty, x.AvatarUrl);
-				el.Tapped += () => {
-					if (ViewModel.SelectedUser != null && string.Equals(ViewModel.SelectedUser.Login, x.Login))
-						ViewModel.SelectedUser = null;
-					else
-						ViewModel.SelectedUser = x;
-				};
-				if (ViewModel.SelectedUser != null && string.Equals(ViewModel.SelectedUser.Login, x.Login, StringComparison.OrdinalIgnoreCase))
-					el.Accessory = UITableViewCellAccessory.Checkmark;
-				else
-					el.Accessory = UITableViewCellAccessory.None;
-				return el;
-			});
+            var vm = (IssueAssignedToViewModel)ViewModel;
+            BindCollection(vm.Users, x =>
+            {
+                var avatar = new GitHubAvatar(x.AvatarUrl);
+                var el = new UserElement(x.Login, string.Empty, string.Empty, avatar);
+                el.Clicked.Subscribe(_ => {
+                    if (vm.SelectedUser != null && string.Equals(vm.SelectedUser.Login, x.Login))
+                        vm.SelectedUser = null;
+                    else
+                        vm.SelectedUser = x;
+                });
 
-			ViewModel.WhenAnyValue(x => x.SelectedUser).Where(x => x != null).Subscribe(x =>
-			{
-				if (Root.Count == 0)
-					return;
-				foreach (var m in Root[0].Cast<UserElement>())
-					m.Accessory = (x != null && string.Equals(ViewModel.SelectedUser.Login, m.Caption, StringComparison.OrdinalIgnoreCase)) ? 
-					          	   UITableViewCellAccessory.Checkmark : UITableViewCellAccessory.None;
-				Root.Reload(Root[0], UITableViewRowAnimation.None);
-			});
+                if (vm.SelectedUser != null && string.Equals(vm.SelectedUser.Login, x.Login, StringComparison.OrdinalIgnoreCase))
+                    el.Accessory = UITableViewCellAccessory.Checkmark;
+                else
+                    el.Accessory = UITableViewCellAccessory.None;
+                return el;
+            });
+
+            vm.Bind(x => x.SelectedUser).Subscribe(x =>
+            {
+                if (Root.Count == 0)
+                    return;
+                foreach (var m in Root[0].Elements.Cast<UserElement>())
+                    m.Accessory = (x != null && string.Equals(vm.SelectedUser.Login, m.Caption, StringComparison.OrdinalIgnoreCase)) ? 
+                                     UITableViewCellAccessory.Checkmark : UITableViewCellAccessory.None;
+            });
+
+            vm.Bind(x => x.IsSaving).SubscribeStatus("Saving...");
         }
     }
 }

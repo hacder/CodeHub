@@ -1,84 +1,63 @@
 using CodeHub.Core.Services;
-using System.Collections.Generic;
-using System;
 using System.Threading.Tasks;
-using CodeHub.iOS.Views.App;
-using MonoTouch.UIKit;
-using Xamarin.Utilities.Core.Services;
-using Xamarin.Utilities.Purchases;
+using UIKit;
+using Plugin.Settings.Abstractions;
+using Plugin.Settings;
 
 namespace CodeHub.iOS.Services
 {
     public class FeaturesService : IFeaturesService
     {
-        private readonly IDefaultValueService _defaultValueService;
-        private readonly IHttpClientService _httpClientService;
-        private readonly IJsonSerializationService _jsonSerializationService;
+        private readonly ISettings _defaultValueService;
+        private readonly IInAppPurchaseService _inAppPurchaseService;
+   
+        public const string ProEdition = "com.dillonbuchanan.codehub.pro";
+        public const string EnterpriseEdition = "com.dillonbuchanan.codehub.enterprise_support";
+        public const string PushNotifications = "com.dillonbuchanan.codehub.push";
 
-
-        public FeaturesService(IDefaultValueService defaultValueService, IHttpClientService httpClientService, IJsonSerializationService jsonSerializationService)
+        public FeaturesService(IInAppPurchaseService inAppPurchaseService)
         {
-            _defaultValueService = defaultValueService;
-            _httpClientService = httpClientService;
-            _jsonSerializationService = jsonSerializationService;
+            _defaultValueService = CrossSettings.Current;
+            _inAppPurchaseService = inAppPurchaseService;
         }
 
-        public bool IsPushNotificationsActivated
+        public bool IsProEnabled
         {
             get
             {
-                return IsActivated(FeatureIds.PushNotifications);
+                return IsActivated(ProEdition);
             }
-            set
+        }
+
+        public async Task ActivatePro()
+        {
+            await _inAppPurchaseService.PurchaseProduct(ProEdition);
+            ActivateUserNotifications();
+        }
+
+        public void ActivateProDirect()
+        {
+            _defaultValueService.AddOrUpdateValue(ProEdition, true);
+        }
+
+        public async Task RestorePro()
+        {
+            await _inAppPurchaseService.Restore();
+            ActivateUserNotifications();
+        }
+
+        private bool IsActivated(string id)
+        {
+            return _defaultValueService.GetValueOrDefault(id, false);
+        }
+
+        private void ActivateUserNotifications()
+        {
+            if (IsProEnabled)
             {
-                _defaultValueService.Set(FeatureIds.PushNotifications, value);
+                var appDelegate = UIApplication.SharedApplication.Delegate as AppDelegate;
+                appDelegate?.RegisterUserForNotifications();
             }
-        }
-
-        public bool IsEnterpriseSupportActivated
-        {
-            get
-            {
-                return IsActivated(FeatureIds.EnterpriseSupport);
-            }
-            set
-            {
-                _defaultValueService.Set(FeatureIds.EnterpriseSupport, value);
-            }
-        }
-
-        public void Activate(string id)
-        {
-            //InAppPurchases.Instance.PurchaseProduct(id);
-        }
-
-        public bool IsActivated(string id)
-        {
-            bool value;
-            return _defaultValueService.TryGet<bool>(id, out value) && value;
-        }
-
-        public async Task<IEnumerable<string>> GetAvailableFeatureIds()
-        {
-            var ids = new List<string>();
-            ids.Add(FeatureIds.EnterpriseSupport);
-            var client = _httpClientService.Create();
-            client.Timeout = new TimeSpan(0, 0, 15);
-            var response = await client.GetAsync("http://push.codehub-app.com/in-app");
-            var data = await response.Content.ReadAsStringAsync();
-            ids.AddRange(_jsonSerializationService.Deserialize<List<string>>(data));
-            return ids;
-        }
-
-        public Task PromptPushNotificationFeature()
-        {
-            var tcs = new TaskCompletionSource<object>();
-            var ctrl = IoC.Resolve<EnablePushNotificationsViewController>();
-            ctrl.Dismissed += (sender, e) => tcs.SetResult(null);
-            var appDelegate = UIApplication.SharedApplication.Delegate as AppDelegate;
-            if (appDelegate != null)
-                appDelegate.Window.RootViewController.PresentViewController(ctrl, true, null);
-            return tcs.Task;
         }
     }
 }

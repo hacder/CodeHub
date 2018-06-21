@@ -1,136 +1,146 @@
 ﻿using System;
-using CodeHub.Core.Data;
-using GitHubSharp;
+using System.Collections.Generic;
+using System.Linq;
+using System.Net.Http;
+using System.Text;
 using System.Threading.Tasks;
+using CodeHub.Core.Data;
+using CodeHub.Core.Utilities;
 
 namespace CodeHub.Core.Services
 {
+    public interface ILoginService
+    {
+        Task LoginWithToken(string clientId, string clientSecret, string code, string redirect, string requestDomain, string apiDomain);
+
+        Task LoginWithToken(string apiDomain, string webDomain, string token, bool enterprise);
+
+        Task LoginWithBasic(string domain, string user, string pass, string twoFactor = null);
+    }
+
     public class LoginService : ILoginService
     {
-        private static readonly string[] Scopes = { "user", "public_repo", "repo", "notifications", "gist" };
-        private readonly IAccountsService _accounts;
+        private static readonly string[] Scopes = { "user", "repo", "notifications", "gist" };
 
-        public LoginService(IAccountsService accounts)
+        private readonly IApplicationService _applicationService;
+        private readonly IAccountsService _accountsService;
+
+        public LoginService(
+            IAccountsService accountsService,
+            IApplicationService applicationService)
         {
-            _accounts = accounts;
+            _accountsService = accountsService;
+            _applicationService = applicationService;
         }
 
-		public async Task<LoginData> LoginWithToken(string clientId, string clientSecret, string code, string redirect, string requestDomain, string apiDomain, GitHubAccount account)
+        public async Task LoginWithToken(string clientId, string clientSecret, string code, string redirect, string requestDomain, string apiDomain)
         {
-			var token = await Client.RequestAccessToken(clientId, clientSecret, code, redirect, requestDomain);
-			var client = Client.BasicOAuth(token.AccessToken, apiDomain);
-            var info = (await client.ExecuteAsync(client.AuthenticatedUser.GetInfo())).Data;
-            var username = info.Login;
+            var oauthRequest = new Octokit.OauthTokenRequest(clientId, clientSecret, code)
+            {
+                RedirectUri = new Uri(redirect)
+            };
 
-            //Does this user exist?
-            var exists = account != null;
-			if (!exists)
-                account = new GitHubAccount { Username = username };
-			account.OAuth = token.AccessToken;
-            account.AvatarUrl = info.AvatarUrl;
-            account.Name = info.Name;
-            account.Email = info.Email;
-			account.Domain = apiDomain;
-			account.WebDomain = requestDomain;
-			client.Username = username;
+            var client = new Octokit.GitHubClient(OctokitClientFactory.UserAgent);
+            var token = await client.Oauth.CreateAccessToken(oauthRequest);
 
-            if (exists)
-                _accounts.Update(account);
-            else
-                _accounts.Insert(account);
-			return new LoginData { Client = client, Account = account };
+            var credentials = new Octokit.Credentials(token.AccessToken);
+            client = OctokitClientFactory.Create(new Uri(apiDomain), credentials);
+
+            var user = await client.User.Current();
+            var account = await _accountsService.Get(apiDomain, user.Login);
+
+            account = account ?? new Account { Username = user.Login };
+            account.OAuth = token.AccessToken;
+            account.AvatarUrl = user.AvatarUrl;
+            account.Domain = apiDomain;
+            account.WebDomain = requestDomain;
+
+            await _accountsService.Save(account);
+            await _applicationService.LoginAccount(account);
         }
 
-		public async Task<Client> LoginAccount(GitHubAccount account)
+        public async Task LoginWithToken(string apiDomain, string webDomain, string token, bool enterprise)
         {
-            //Create the client
-			Client client = null;
-			if (!string.IsNullOrEmpty(account.OAuth))
-			{
-				client = Client.BasicOAuth(account.OAuth, account.Domain ?? Client.DefaultApi);
-			}
-			else if (account.IsEnterprise || !string.IsNullOrEmpty(account.Password))
-			{
-				client = Client.Basic(account.Username, account.Password, account.Domain ?? Client.DefaultApi);
-			}
+            if (string.IsNullOrEmpty(token))
+                throw new ArgumentException("Token is invalid");
+            if (apiDomain != null && !Uri.IsWellFormedUriString(apiDomain, UriKind.Absolute))
+                throw new ArgumentException("API Domain is invalid");
+            if (webDomain != null && !Uri.IsWellFormedUriString(webDomain, UriKind.Absolute))
+                throw new ArgumentException("Web Domain is invalid");
 
-			var data = await client.ExecuteAsync(client.AuthenticatedUser.GetInfo());
-			var userInfo = data.Data;
+            var credentials = new Octokit.Credentials(token);
+            var client = OctokitClientFactory.Create(new Uri(apiDomain), credentials);
+            var userInfo = await client.User.Current();
+
+            var scopes = await GetScopes(apiDomain, userInfo.Login, token);
+            CheckScopes(scopes);
+
+            var account = (await _accountsService.Get(apiDomain, userInfo.Login)) ?? new Account();
             account.Username = userInfo.Login;
-            account.Name = userInfo.Name;
-            account.Email = userInfo.Email;
+            account.Domain = apiDomain;
+            account.WebDomain = webDomain;
+            account.IsEnterprise = enterprise;
+            account.OAuth = token;
             account.AvatarUrl = userInfo.AvatarUrl;
-			client.Username = userInfo.Login;
-            _accounts.Update(account);
-            return client;
+
+            await _accountsService.Save(account);
+            await _applicationService.LoginAccount(account);
         }
 
-        public async Task<LoginData> Authenticate(string domain, string user, string pass, string twoFactor, bool enterprise, GitHubAccount account)
+        public async Task LoginWithBasic(string domain, string user, string pass, string twoFactor = null)
         {
-            //Fill these variables in during the proceeding try/catch
-            var apiUrl = domain;
+            if (string.IsNullOrEmpty(user))
+                throw new ArgumentException("Username is invalid");
+            if (string.IsNullOrEmpty(pass))
+                throw new ArgumentException("Password is invalid");
+            if (domain == null || !Uri.IsWellFormedUriString(domain, UriKind.Absolute))
+                throw new ArgumentException("Domain is invalid");
 
-            try
+            var newAuthorization = new Octokit.NewAuthorization(
+                $"CodeHub: {user}", Scopes, Guid.NewGuid().ToString());
+
+            var credentials = new Octokit.Credentials(user, pass);
+            var client = OctokitClientFactory.Create(new Uri(domain), credentials);
+
+            var authorization = await (twoFactor == null
+                                ? client.Authorization.Create(newAuthorization)
+                                : client.Authorization.Create(newAuthorization, twoFactor));
+
+            var existingAccount = await _accountsService.Get(domain, user);
+            var account = existingAccount ?? new Account
             {
-                //Make some valid checks
-                if (string.IsNullOrEmpty(user))
-                    throw new ArgumentException("Username is invalid");
-                if (string.IsNullOrEmpty(pass))
-                    throw new ArgumentException("Password is invalid");
-                if (apiUrl != null && !Uri.IsWellFormedUriString(apiUrl, UriKind.Absolute))
-                    throw new ArgumentException("Domain is invalid");
+                Username = user,
+                IsEnterprise = true,
+                WebDomain = domain,
+                Domain = domain
+            };
 
-                //Does this user exist?
-                bool exists = account != null;
-                if (!exists)
-                    account = new GitHubAccount { Username = user };
+            account.OAuth = authorization.Token;
 
-                account.Domain = apiUrl;
-				account.IsEnterprise = enterprise;
-                var client = twoFactor == null ? Client.Basic(user, pass, apiUrl) : Client.BasicTwoFactorAuthentication(user, pass, twoFactor, apiUrl);
-
-				if (enterprise)
-				{
-					account.Password = pass;
-				}
-				else
-				{
-                    var auth = await client.ExecuteAsync(client.Authorizations.GetOrCreate("72f4fb74bdba774b759d", "9253ab615f8c00738fff5d1c665ca81e581875cb", new System.Collections.Generic.List<string>(Scopes), "CodeHub", null));
-	                account.OAuth = auth.Data.Token;
-				}
-
-                var data = await client.ExecuteAsync(client.AuthenticatedUser.GetInfo());
-                var userInfo = data.Data;
-                account.Username = userInfo.Login;
-                account.Name = userInfo.Name;
-                account.Email = userInfo.Email;
-                account.AvatarUrl = userInfo.AvatarUrl;
-
-                if (exists)
-                    _accounts.Update(account);
-                else
-                    _accounts.Insert(account);
-
-				return new LoginData { Client = client, Account = account };
-            }
-            catch (StatusCodeException ex)
-            {
-                //Looks like we need to ask for the key!
-                if (ex.Headers.ContainsKey("X-GitHub-OTP"))
-                    throw new TwoFactorRequiredException();
-                throw new Exception("Unable to login as user " + user + ". Please check your credentials and try again.");
-            }
+            await _applicationService.LoginAccount(account);
         }
 
-        /// <summary>
-        /// Goofy exception so we can catch and do two factor auth
-        /// </summary>
-        public class TwoFactorRequiredException : Exception
+        private static async Task<List<string>> GetScopes(string domain, string username, string token)
         {
-            public TwoFactorRequiredException()
-                : base("Two Factor Authentication is Required!")
-            {
-            }
+            var client = new HttpClient();
+            var authToken = Convert.ToBase64String(Encoding.UTF8.GetBytes(string.Format("{0}:{1}", username, token)));
+            client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", authToken);
+            domain = (domain.EndsWith("/", StringComparison.Ordinal) ? domain : domain + "/") + "user";
+            var response = await client.GetAsync(domain);
+
+            if (!response.Headers.TryGetValues("X-OAuth-Scopes", out IEnumerable<string> scopes))
+                return new List<string>();
+
+            var values = scopes.FirstOrDefault() ?? string.Empty;
+            return values.Split(',').Select(x => x.Trim()).ToList();
+        }
+
+        private static void CheckScopes(IEnumerable<string> scopes)
+        {
+            var missing = OctokitClientFactory.Scopes.Except(scopes).ToList();
+            if (missing.Any())
+                throw new InvalidOperationException("Missing scopes! You are missing access to the following " +
+                    "scopes that are necessary for CodeHub to operate correctly: " + string.Join(", ", missing));
         }
     }
 }

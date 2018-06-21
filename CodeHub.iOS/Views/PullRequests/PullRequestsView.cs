@@ -1,47 +1,48 @@
-using System;
+using CodeHub.iOS.ViewControllers;
 using CodeHub.Core.ViewModels.PullRequests;
-using MonoTouch.UIKit;
-using ReactiveUI;
-using CodeHub.iOS.TableViewSources;
-using System.Reactive.Linq;
+using UIKit;
+using CodeHub.iOS.DialogElements;
+using System;
+using GitHubSharp.Models;
 
 namespace CodeHub.iOS.Views.PullRequests
 {
-    public class PullRequestsView : ReactiveTableViewController<PullRequestsViewModel>
+    public class PullRequestsView : ViewModelCollectionDrivenDialogViewController
     {
-        private UISegmentedControl _viewSegment;
-        private UIBarButtonItem _segmentBarButtonItem;
-
+        private readonly UISegmentedControl _viewSegment;
+ 
         public PullRequestsView()
         {
             Title = "Pull Requests";
+
+            EmptyView = new Lazy<UIView>(() =>
+                new EmptyListView(Octicon.GitPullRequest.ToImage(64f), "There are no pull requests.")); 
+
+            _viewSegment = new UISegmentedControl(new object[] { "Open", "Closed" });
+            NavigationItem.TitleView = _viewSegment;
         }
 
         public override void ViewDidLoad()
         {
             base.ViewDidLoad();
 
-            _viewSegment = new UISegmentedControl(new object[] { "Open", "Closed" });
-            _segmentBarButtonItem = new UIBarButtonItem(_viewSegment) {Width = View.Frame.Width - 10f};
-            ToolbarItems = new[] { new UIBarButtonItem(UIBarButtonSystemItem.FlexibleSpace), _segmentBarButtonItem, new UIBarButtonItem(UIBarButtonSystemItem.FlexibleSpace) };
-            _viewSegment.ValueChanged += (sender, args) => ViewModel.SelectedFilter = _viewSegment.SelectedSegment;
-            ViewModel.WhenAnyValue(x => x.SelectedFilter).Skip(1).Subscribe(x => _viewSegment.SelectedSegment = x);
+            TableView.EstimatedRowHeight = 64f;
+            TableView.RowHeight = UITableView.AutomaticDimension;
 
-            TableView.Source = new PullRequestTableViewSource(TableView, ViewModel.PullRequests);
+            var vm = (PullRequestsViewModel)ViewModel;
+            var weakVm = new WeakReference<PullRequestsViewModel>(vm);
+            BindCollection(vm.PullRequests, s => new PullRequestElement(s, MakeCallback(weakVm, s)));
+
+            OnActivation(d =>
+            {
+                d(vm.Bind(x => x.SelectedFilter, true).Subscribe(x => _viewSegment.SelectedSegment = (nint)x));
+                d(_viewSegment.GetChangedObservable().Subscribe(x => vm.SelectedFilter = x));
+            });
         }
 
-        public override void ViewWillAppear(bool animated)
+        private static Action MakeCallback(WeakReference<PullRequestsViewModel> weakVm, PullRequestModel model)
         {
-            base.ViewWillAppear(animated);
-            if (ToolbarItems != null)
-                NavigationController.SetToolbarHidden(false, animated);
-        }
-
-        public override void ViewWillDisappear(bool animated)
-        {
-            base.ViewWillDisappear(animated);
-            if (ToolbarItems != null)
-                NavigationController.SetToolbarHidden(true, animated);
+            return new Action(() => weakVm.Get()?.GoToPullRequestCommand.Execute(model));
         }
     }
 }

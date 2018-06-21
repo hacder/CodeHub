@@ -1,34 +1,33 @@
-using System;
-using System.Globalization;
-using CodeFramework.Elements;
+using CodeHub.iOS.ViewControllers;
+using GitHubSharp.Models;
 using CodeHub.Core.ViewModels.Issues;
-using Xamarin.Utilities.ViewControllers;
-using Xamarin.Utilities.DialogElements;
-using Xamarin.Utilities.Core.ViewModels;
-using ReactiveUI;
+using CodeHub.iOS.DialogElements;
+using System;
 
 namespace CodeHub.iOS.Views.Issues
 {
-    public abstract class BaseIssuesView<TViewModel> : ViewModelCollectionViewController<TViewModel> where TViewModel : class, IBaseViewModel, IBaseIssuesViewModel
+    public abstract class BaseIssuesView : ViewModelCollectionDrivenDialogViewController
     {
-        protected BaseIssuesView()
-            : base(unevenRows: true)
+        public new IBaseIssuesViewModel ViewModel
         {
-            Title = "Issues";
-
-            this.WhenActivated(d =>
-            {
-                d(SearchTextChanging.Subscribe(x => ViewModel.SearchKeyword = x));
-            });
+            get { return (IBaseIssuesViewModel)base.ViewModel; }
+            set { base.ViewModel = value; }
         }
 
-        protected Element CreateElement(IssueItemViewModel x)
+        protected BaseIssuesView()
         {
-            var assigned = x.Issue.Assignee != null ? x.Issue.Assignee.Login : "unassigned";
-            var kind = x.IsPullRequest ? "Pull" : "Issue";
-            var commentString = x.Issue.Comments == 1 ? "1 comment" : x.Issue.Comments + " comments";
-            var el = new IssueElement(x.Issue.Number.ToString(CultureInfo.InvariantCulture), x.Issue.Title, assigned, x.Issue.State, commentString, kind, x.Issue.UpdatedAt);
-            el.Tapped += () => ViewModel.GoToIssueCommand.ExecuteIfCan(x);
+            Title = "Issues";
+        }
+
+        protected IssueElement CreateElement(IssueModel x)
+        {
+            var weakVm = new WeakReference<IBaseIssuesViewModel>(ViewModel);
+            var isPullRequest = x.PullRequest != null && !(string.IsNullOrEmpty(x.PullRequest.HtmlUrl));
+            var assigned = x.Assignee != null ? x.Assignee.Login : "unassigned";
+            var kind = isPullRequest ? "Pull" : "Issue";
+            var commentString = x.Comments == 1 ? "1 comment" : x.Comments + " comments";
+            var el = new IssueElement(x.Number.ToString(), x.Title, assigned, x.State, commentString, kind, x.UpdatedAt);
+            el.Tapped += () => weakVm.Get()?.GoToIssueCommand.Execute(x);
             return el;
         }
     }

@@ -1,25 +1,27 @@
 ﻿using ReactiveUI;
 using System;
+using CodeHub.Core.Utilities;
+using System.Reactive;
 
 namespace CodeHub.Core.ViewModels.Users
 {
-    public class UserItemViewModel : ReactiveObject
-    {
-        public string Name { get; private set; }
+	public class UserItemViewModel : ReactiveObject, ICanGoToViewModel
+	{
+        public string Login => User.Login;
 
-        public string Url { get; private set; }
+        public string Name => User.Name;
 
-        public bool IsOrganization { get; private set; }
+        public GitHubAvatar Avatar => new GitHubAvatar(User.AvatarUrl);
 
-        public IReactiveCommand GoToCommand { get; private set; }
+        public ReactiveCommand<Unit, Unit> GoToCommand { get; }
 
-        internal UserItemViewModel(string name, string url, bool organization, Action<UserItemViewModel> gotoAction)
-        {
-            Name = name;
-            Url = url;
-            IsOrganization = organization;
-            GoToCommand = ReactiveCommand.Create().WithSubscription(x => gotoAction(this));
-        }
-    }
+        public Octokit.User User { get; }
+
+		internal UserItemViewModel(Octokit.User user, Action<UserItemViewModel> gotoAction)
+		{
+            User = user;
+			GoToCommand = ReactiveCommand.Create(() => gotoAction?.Invoke(this));
+		}
+	}
 }
 

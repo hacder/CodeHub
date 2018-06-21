@@ -1,69 +1,84 @@
-using System;
-using System.Reactive.Linq;
 using GitHubSharp.Models;
+using System.Windows.Input;
+using System.Threading.Tasks;
 using GitHubSharp;
 using System.Collections.Generic;
-using ReactiveUI;
-using Xamarin.Utilities.Core.ViewModels;
-using Xamarin.Utilities.Core;
+using MvvmCross.Core.ViewModels;
+using CodeHub.Core.Services;
+using Splat;
 
 namespace CodeHub.Core.ViewModels.Changesets
 {
-    public abstract class CommitsViewModel : BaseViewModel, ILoadableViewModel, IProvidesSearchKeyword
-	{
-		public string RepositoryOwner { get; set; }
+    public abstract class CommitsViewModel : LoadableViewModel
+    {
+        private readonly CollectionViewModel<CommitModel> _commits = new CollectionViewModel<CommitModel>();
+        private readonly IFeaturesService _featuresService;
+        private readonly IApplicationService _applicationService;
 
-		public string RepositoryName { get; set; }
-
-        public IReactiveCommand<object> GoToChangesetCommand { get; private set; }
-
-        public IReadOnlyReactiveList<CommitItemViewModel> Commits { get; private set; }
-
-        public IReactiveCommand LoadCommand { get; private set; }
-
-        private string _searchKeyword;
-        public string SearchKeyword
+        public string Username
         {
-            get { return _searchKeyword; }
-            set { this.RaiseAndSetIfChanged(ref _searchKeyword, value); }
+            get;
+            private set;
         }
 
-	    protected CommitsViewModel()
-	    {
-            Title = "Commits";
+        public string Repository
+        {
+            get;
+            private set;
+        }
 
-            var commits = new ReactiveList<CommitModel>();
-            Commits = commits.CreateDerivedCollection(
-                x => new CommitItemViewModel(x, GoToChangesetCommand.ExecuteIfCan), 
-                ContainsSearchKeyword, 
-                signalReset: this.WhenAnyValue(x => x.SearchKeyword));
+        private bool _shouldShowPro; 
+        public bool ShouldShowPro
+        {
+            get { return _shouldShowPro; }
+            protected set { this.RaiseAndSetIfChanged(ref _shouldShowPro, value); }
+        }
 
-            GoToChangesetCommand = ReactiveCommand.Create();
-            GoToChangesetCommand.OfType<CommitItemViewModel>().Subscribe(x =>
-	        {
-	            var vm = CreateViewModel<ChangesetViewModel>();
-	            vm.RepositoryOwner = RepositoryOwner;
-	            vm.RepositoryName = RepositoryName;
-                vm.Node = x.Commit.Sha;
-                ShowViewModel(vm);
-	        });
+        public ICommand GoToChangesetCommand
+        {
+            get { return new MvxCommand<CommitModel>(x => ShowViewModel<ChangesetViewModel>(new ChangesetViewModel.NavObject { Username = Username, Repository = Repository, Node = x.Sha })); }
+        }
 
-            LoadCommand = ReactiveCommand.CreateAsyncTask(x => commits.SimpleCollectionLoad(GetRequest(), x as bool?));
-	    }
+        public CollectionViewModel<CommitModel> Commits
+        {
+            get { return _commits; }
+        }
+
+        protected CommitsViewModel(
+            IApplicationService applicationService = null,
+            IFeaturesService featuresService = null)
+        {
+            _applicationService = applicationService ?? Locator.Current.GetService<IApplicationService>();
+            _featuresService = featuresService ?? Locator.Current.GetService<IFeaturesService>();
+        }
+
+        public void Init(NavObject navObject)
+        {
+            Username = navObject.Username;
+            Repository = navObject.Repository;
+        }
+
+        protected override Task Load()
+        {
+            if (_featuresService.IsProEnabled)
+                ShouldShowPro = false;
+            else
+            {
+                var repoRequest = _applicationService.Client.Users[Username].Repositories[Repository].Get();
+                _applicationService.Client.ExecuteAsync(repoRequest)
+                    .ToBackground(x => ShouldShowPro = x.Data.Private && !_featuresService.IsProEnabled);
+            }
+            
+            return Commits.SimpleCollectionLoad(GetRequest());
+        }
 
         protected abstract GitHubRequest<List<CommitModel>> GetRequest();
 
-        private bool ContainsSearchKeyword(CommitModel x)
+        public class NavObject
         {
-            try
-            {
-                return x.Commit.Message.ContainsKeyword(SearchKeyword) || x.GenerateCommiterName().ContainsKeyword(SearchKeyword);
-            }
-            catch
-            {
-                return false;
-            }
+            public string Username { get; set; }
+            public string Repository { get; set; }
         }
-	}
+    }
 }
 

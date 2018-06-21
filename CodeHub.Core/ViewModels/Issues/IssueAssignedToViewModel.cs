@@ -1,59 +1,111 @@
-using CodeHub.Core.Services;
+using System;
 using GitHubSharp.Models;
-using ReactiveUI;
-
-using Xamarin.Utilities.Core.ViewModels;
+using System.Threading.Tasks;
+using CodeHub.Core.Messages;
+using MvvmCross.Core.ViewModels;
+using CodeHub.Core.Services;
 
 namespace CodeHub.Core.ViewModels.Issues
 {
-    public class IssueAssignedToViewModel : BaseViewModel, ILoadableViewModel
+    public class IssueAssignedToViewModel : LoadableViewModel
     {
-        private readonly IApplicationService _applicationService;
+        private readonly IMessageService _messageService;
 
         private BasicUserModel _selectedUser;
         public BasicUserModel SelectedUser
         {
-            get { return _selectedUser; }
-            set { this.RaiseAndSetIfChanged(ref _selectedUser, value); }
+            get
+            {
+                return _selectedUser;
+            }
+            set
+            {
+                _selectedUser = value;
+                RaisePropertyChanged(() => SelectedUser);
+            }
         }
 
-        public ReactiveList<BasicUserModel> Users { get; private set; }
-
-        public string RepositoryOwner { get; set; }
-
-        public string RepositoryName { get; set; }
-
-        public long IssueId { get; set; }
-
-        public IReactiveCommand LoadCommand { get; private set; }
-
-        public bool SaveOnSelect { get; set; }
-
-        public IReactiveCommand SelectUserCommand { get; private set; }
-
-        public IssueAssignedToViewModel(IApplicationService applicationService)
+        private bool _isSaving;
+        public bool IsSaving
         {
-            _applicationService = applicationService;
-            Users = new ReactiveList<BasicUserModel>();
+            get { return _isSaving; }
+            private set {
+                _isSaving = value;
+                RaisePropertyChanged(() => IsSaving);
+            }
+        }
 
-            SelectUserCommand = ReactiveCommand.CreateAsyncTask(async t =>
+        private readonly CollectionViewModel<BasicUserModel> _users = new CollectionViewModel<BasicUserModel>();
+        public CollectionViewModel<BasicUserModel> Users
+        {
+            get { return _users; }
+        }
+
+        public string Username  { get; private set; }
+
+        public string Repository { get; private set; }
+
+        public long Id { get; private set; }
+
+        public bool SaveOnSelect { get; private set; }
+
+        public IssueAssignedToViewModel(IMessageService messageService)
+        {
+            _messageService = messageService;
+        }
+
+        public void Init(NavObject navObject) 
+        {
+            Username = navObject.Username;
+            Repository = navObject.Repository;
+            Id = navObject.Id;
+            SaveOnSelect = navObject.SaveOnSelect;
+
+            SelectedUser = TxSevice.Get() as BasicUserModel;
+            this.Bind(x => x.SelectedUser).Subscribe(x => SelectUser(x));
+        }
+
+        private async Task SelectUser(BasicUserModel x)
+        {
+            if (SaveOnSelect)
             {
-                var selectedUser = t as BasicUserModel;
-                if (selectedUser != null)
-                    SelectedUser = selectedUser;
-
-                if (SaveOnSelect)
+                try
                 {
-                    var assignee = SelectedUser != null ? SelectedUser.Login : null;
-                    var updateReq = _applicationService.Client.Users[RepositoryOwner].Repositories[RepositoryName].Issues[IssueId].UpdateAssignee(assignee);
-                    await _applicationService.Client.ExecuteAsync(updateReq);
+                    IsSaving = true;
+                    var assignee = x != null ? x.Login : null;
+                    var updateReq = this.GetApplication().Client.Users[Username].Repositories[Repository].Issues[Id].UpdateAssignee(assignee);
+                    var newIssue = await this.GetApplication().Client.ExecuteAsync(updateReq);
+                    _messageService.Send(new IssueEditMessage(newIssue.Data));
+        
                 }
+                catch
+                {
+                    DisplayAlert("Unable to assign issue to selected user! Please try again.");
+                }
+                finally
+                {
+                    IsSaving = false;
+                }
+            }
+            else
+            {
+                _messageService.Send(new SelectedAssignedToMessage(x));
+            }
 
-                DismissCommand.ExecuteIfCan();
-            });
+            ChangePresentation(new MvxClosePresentationHint(this));
+        }
 
-            LoadCommand = ReactiveCommand.CreateAsyncTask(t => 
-                Users.SimpleCollectionLoad(applicationService.Client.Users[RepositoryOwner].Repositories[RepositoryName].GetAssignees(), t as bool?));
+        protected override Task Load()
+        {
+            return Users.SimpleCollectionLoad(this.GetApplication().Client.Users[Username].Repositories[Repository].GetAssignees());
+        }
+
+        public class NavObject
+        {
+            public string Username { get; set; }
+            public string Repository { get; set; }
+            public long Id { get; set; }
+            public bool SaveOnSelect { get; set; }
         }
     }
 }

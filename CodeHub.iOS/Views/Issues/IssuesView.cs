@@ -1,39 +1,41 @@
 using System;
+using MvvmCross.Platform;
 using CodeHub.Core.Filters;
 using CodeHub.Core.Services;
 using CodeHub.Core.ViewModels.Issues;
-using MonoTouch.UIKit;
-using ReactiveUI;
+using UIKit;
+using CodeHub.iOS.ViewControllers.Filters;
 
 namespace CodeHub.iOS.Views.Issues
 {
-    public class IssuesView : BaseIssuesView<IssuesViewModel>
+    public class IssuesView : BaseIssuesView
     {
-        private readonly IssuesFilterModel _openFilter = IssuesFilterModel.CreateOpenFilter();
-        private readonly IssuesFilterModel _closedFilter = IssuesFilterModel.CreateClosedFilter();
-        private readonly IssuesFilterModel _mineFilter;
-
-        private readonly IApplicationService _applicationService;
         private UISegmentedControl _viewSegment;
         private UIBarButtonItem _segmentBarButton;
 
-        public IssuesView(IApplicationService applicationService)
+        public new IssuesViewModel ViewModel
         {
-            _applicationService = applicationService;
-            _mineFilter = IssuesFilterModel.CreateMineFilter(_applicationService.Account.Username);
+            get { return (IssuesViewModel)base.ViewModel; }
+            set { base.ViewModel = value; }
         }
 
         public override void ViewDidLoad()
         {
-            NavigationItem.RightBarButtonItem = new UIBarButtonItem(UIBarButtonSystemItem.Add).WithCommand(ViewModel.GoToNewIssueCommand);
+            var addButton = new UIBarButtonItem(UIBarButtonSystemItem.Add);
+            NavigationItem.RightBarButtonItem = addButton;
 
             base.ViewDidLoad();
 
             _viewSegment = new CustomUISegmentedControl(new [] { "Open", "Closed", "Mine", "Custom" }, 3);
-            _segmentBarButton = new UIBarButtonItem(_viewSegment) {Width = View.Frame.Width - 10f};
+            _segmentBarButton = new UIBarButtonItem(_viewSegment);
+            _segmentBarButton.Width = View.Frame.Width - 10f;
             ToolbarItems = new [] { new UIBarButtonItem(UIBarButtonSystemItem.FlexibleSpace), _segmentBarButton, new UIBarButtonItem(UIBarButtonSystemItem.FlexibleSpace) };
-            
-            this.BindList(ViewModel.Issues, CreateElement);
+            BindCollection(ViewModel.Issues, CreateElement);
+
+            OnActivation(d =>
+            {
+                d(addButton.GetClickedObservable().BindCommand(ViewModel.GoToNewIssueCommand));
+            });
         }
 
         public override void ViewWillAppear(bool animated)
@@ -44,8 +46,47 @@ namespace CodeHub.iOS.Views.Issues
 
             //Before we select which one, make sure we detach the event handler or silly things will happen
             _viewSegment.ValueChanged -= SegmentValueChanged;
-            _viewSegment.SelectedSegment = (int)ViewModel.FilterSelection;
+
+            var application = Mvx.Resolve<IApplicationService>();
+
+            //Select which one is currently selected
+            if (ViewModel.Issues.Filter.Equals(IssuesFilterModel.CreateOpenFilter()))
+                _viewSegment.SelectedSegment = 0;
+            else if (ViewModel.Issues.Filter.Equals(IssuesFilterModel.CreateClosedFilter()))
+                _viewSegment.SelectedSegment = 1;
+            else if (ViewModel.Issues.Filter.Equals(IssuesFilterModel.CreateMineFilter(application.Account.Username)))
+                _viewSegment.SelectedSegment = 2;
+            else
+                _viewSegment.SelectedSegment = 3;
+
             _viewSegment.ValueChanged += SegmentValueChanged;
+        }
+
+        void SegmentValueChanged (object sender, EventArgs e)
+        {
+            var application = Mvx.Resolve<IApplicationService>();
+
+            // If there is searching going on. Finish it.
+            FinishSearch();
+
+            if (_viewSegment.SelectedSegment == 0)
+            {
+                ViewModel.Issues.ApplyFilter(IssuesFilterModel.CreateOpenFilter(), true);
+            }
+            else if (_viewSegment.SelectedSegment == 1)
+            {
+                ViewModel.Issues.ApplyFilter(IssuesFilterModel.CreateClosedFilter(), true);
+            }
+            else if (_viewSegment.SelectedSegment == 2)
+            {
+                ViewModel.Issues.ApplyFilter(IssuesFilterModel.CreateMineFilter(application.Account.Username), true);
+            }
+            else if (_viewSegment.SelectedSegment == 3)
+            {
+                var filter = new IssuesFilterViewController(ViewModel.Username, ViewModel.Repository, ViewModel.Issues);
+                var nav = new UINavigationController(filter);
+                PresentViewController(nav, true, null);
+            }
         }
 
         public override void ViewWillDisappear(bool animated)
@@ -55,35 +96,22 @@ namespace CodeHub.iOS.Views.Issues
                 NavigationController.SetToolbarHidden(true, animated);
         }
 
-        void SegmentValueChanged (object sender, EventArgs e)
+        public override void ViewDidDisappear(bool animated)
         {
-            switch (_viewSegment.SelectedSegment)
-            {
-                case 0:
-                    ViewModel.FilterSelection = IssuesViewModel.IssueFilterSelection.Open;
-                    break;
-                case 1:
-                    ViewModel.FilterSelection = IssuesViewModel.IssueFilterSelection.Closed;
-                    break;
-                case 2:
-                    ViewModel.FilterSelection = IssuesViewModel.IssueFilterSelection.Mine;
-                    break;
-                case 3:
-                    ViewModel.GoToCustomFilterCommand.ExecuteIfCan();
-                    break;
-            }
+            base.ViewDidDisappear(animated);
+            _viewSegment.ValueChanged -= SegmentValueChanged;
         }
 
         private class CustomUISegmentedControl : UISegmentedControl
         {
             readonly int _multipleTouchIndex;
-            public CustomUISegmentedControl(string[] args, int multipleTouchIndex)
+            public CustomUISegmentedControl(object[] args, int multipleTouchIndex)
                 : base(args)
             {
                 this._multipleTouchIndex = multipleTouchIndex;
             }
 
-            public override void TouchesEnded(MonoTouch.Foundation.NSSet touches, UIEvent evt)
+            public override void TouchesEnded(Foundation.NSSet touches, UIEvent evt)
             {
                 var previousSelected = SelectedSegment;
                 base.TouchesEnded(touches, evt);

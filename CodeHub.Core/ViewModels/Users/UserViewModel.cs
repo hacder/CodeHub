@@ -1,138 +1,91 @@
-using System;
 using System.Threading.Tasks;
+using System.Windows.Input;
 using CodeHub.Core.Services;
 using CodeHub.Core.ViewModels.Events;
-using CodeHub.Core.ViewModels.Gists;
 using CodeHub.Core.ViewModels.Organizations;
-using CodeHub.Core.ViewModels.Repositories;
-using GitHubSharp.Models;
-using ReactiveUI;
-using Xamarin.Utilities.Core.ViewModels;
-using System.Reactive.Linq;
+using MvvmCross.Core.ViewModels;
+using Splat;
 
-namespace CodeHub.Core.ViewModels.Users
+namespace CodeHub.Core.ViewModels.User
 {
-    public class UserViewModel : BaseViewModel, ILoadableViewModel
+    public class UserViewModel : LoadableViewModel
     {
-        private readonly IApplicationService _applicationService;
+        private readonly IApplicationService _applicationService = Locator.Current.GetService<IApplicationService>();
 
-        private string _username;
-        public string Username 
+        public string Username { get; private set; }
+
+        private Octokit.User _user;
+        public Octokit.User User
         {
-            get { return _username; }
-            set
+            get { return _user; }
+            set { this.RaiseAndSetIfChanged(ref _user, value); }
+        }
+
+        private bool _isFollowing;
+        public bool IsFollowing
+        {
+            get { return _isFollowing; }
+            private set { this.RaiseAndSetIfChanged(ref _isFollowing, value); }
+        }
+
+        public bool IsLoggedInUser
+        {
+            get
             {
-                _username = value;
-                Title = value;
+                return string.Equals(Username, this.GetApplication().Account.Username);
             }
         }
 
-        private UserModel _userModel;
-        public UserModel User
+        public ICommand GoToEventsCommand
         {
-            get { return _userModel; }
-            private set { this.RaiseAndSetIfChanged(ref _userModel, value); }
+            get { return new MvxCommand(() => ShowViewModel<UserEventsViewModel>(new UserEventsViewModel.NavObject { Username = Username })); }
         }
 
-        private bool? _isFollowing;
-        public bool? IsFollowing
-		{
-			get { return _isFollowing; }
-			private set { this.RaiseAndSetIfChanged(ref _isFollowing, value); }
-		}
-
-		public bool IsLoggedInUser
-		{
-			get { return string.Equals(Username, _applicationService.Account.Username); }
-		}
-
-        public IReactiveCommand LoadCommand { get; private set; }
-
-        public IReactiveCommand<object> GoToFollowersCommand { get; private set; }
-
-        public IReactiveCommand<object> GoToFollowingCommand { get; private set; }
-
-        public IReactiveCommand<object> GoToEventsCommand { get; private set; }
-
-        public IReactiveCommand<object> GoToOrganizationsCommand  { get; private set; }
-
-        public IReactiveCommand<object> GoToRepositoriesCommand { get; private set; }
-
-        public IReactiveCommand<object> GoToGistsCommand { get; private set; }
-
-		public IReactiveCommand ToggleFollowingCommand { get; private set; }
-
-
-		private async Task ToggleFollowing()
-		{
-		    if (!IsFollowing.HasValue) return;
-			if (IsFollowing.Value)
-				await _applicationService.Client.ExecuteAsync(_applicationService.Client.AuthenticatedUser.Unfollow(Username));
-			else
-				await _applicationService.Client.ExecuteAsync(_applicationService.Client.AuthenticatedUser.Follow(Username));
-			IsFollowing = !IsFollowing.Value;
-		}
-
-        public UserViewModel(IApplicationService applicationService)
+        public ICommand GoToOrganizationsCommand
         {
-            _applicationService = applicationService;
+            get { return new MvxCommand(() => ShowViewModel<OrganizationsViewModel>(new OrganizationsViewModel.NavObject { Username = Username })); }
+        }
 
-            ToggleFollowingCommand = ReactiveCommand.CreateAsyncTask(
-                this.WhenAnyValue(x => x.IsFollowing).Select(x => x.HasValue), t => ToggleFollowing());
+        public ICommand ToggleFollowingCommand
+        {
+            get { return new MvxCommand(() => ToggleFollowing().ToBackground()); }
+        }
 
-            GoToGistsCommand = ReactiveCommand.Create();
-            GoToGistsCommand.Subscribe(_ =>
+        private async Task ToggleFollowing()
+        {
+            try
             {
-                var vm = CreateViewModel<UserGistsViewModel>();
-                vm.Username = Username;
-                ShowViewModel(vm);
-            });
-
-            GoToRepositoriesCommand = ReactiveCommand.Create();
-            GoToRepositoriesCommand.Subscribe(_ =>
+                if (IsFollowing)
+                    await _applicationService.GitHubClient.User.Followers.Unfollow(Username);
+                else
+                    await _applicationService.GitHubClient.User.Followers.Follow(Username);
+                IsFollowing = !IsFollowing;
+            }
+            catch
             {
-                var vm = CreateViewModel<UserRepositoriesViewModel>();
-                vm.Username = Username;
-                ShowViewModel(vm);
-            });
+                DisplayAlert("Unable to follow user! Please try again.");
+            }
+        }
+  
+        public void Init(NavObject navObject)
+        {
+            Title = Username = navObject.Username;
+        }
 
-            GoToOrganizationsCommand = ReactiveCommand.Create();
-            GoToOrganizationsCommand.Subscribe(_ =>
-            {
-                var vm = CreateViewModel<OrganizationsViewModel>();
-                vm.Username = Username;
-                ShowViewModel(vm);
-            });
+        protected override async Task Load()
+        {
+            _applicationService.GitHubClient.User.Followers
+                .IsFollowingForCurrent(Username).ToBackground(x => IsFollowing = x);
 
-            GoToEventsCommand = ReactiveCommand.Create();
-            GoToEventsCommand.Subscribe(_ =>
-            {
-                var vm = CreateViewModel<UserEventsViewModel>();
-                vm.Username = Username;
-                ShowViewModel(vm);
-            });
+            if (User != null)
+                _applicationService.GitHubClient.User.Get(Username).ToBackground(x => User = x);
+            else
+                User = await _applicationService.GitHubClient.User.Get(Username);
+        }
 
-            GoToFollowingCommand = ReactiveCommand.Create();
-            GoToFollowingCommand.Subscribe(_ =>
-            {
-                var vm = CreateViewModel<UserFollowingsViewModel>();
-                vm.Username = Username;
-                ShowViewModel(vm);
-            });
-
-            GoToFollowersCommand = ReactiveCommand.Create();
-            GoToFollowersCommand.Subscribe(_ =>
-            {
-                var vm = CreateViewModel<UserFollowersViewModel>();
-                vm.Username = Username;
-                ShowViewModel(vm);
-            });
-
-            LoadCommand = ReactiveCommand.CreateAsyncTask(t =>
-            {
-                this.RequestModel(applicationService.Client.AuthenticatedUser.IsFollowing(Username), t as bool?, x => IsFollowing = x.Data).FireAndForget();
-                return this.RequestModel(applicationService.Client.Users[Username].Get(), t as bool?, response => User = response.Data);
-            });
+        public class NavObject
+        {
+            public string Username { get; set; }
         }
     }
 }

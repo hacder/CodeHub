@@ -1,24 +1,35 @@
-using CodeHub.Core.Services;
 using GitHubSharp;
 using System.Collections.Generic;
 using GitHubSharp.Models;
+using CodeHub.Core.Services;
 
 namespace CodeHub.Core.ViewModels.Changesets
 {
-	public class ChangesetsViewModel : CommitsViewModel
-	{
-	    protected readonly IApplicationService ApplicationService;
+    public class ChangesetsViewModel : CommitsViewModel
+    {
+        public string Branch { get; private set; }
 
-	    public string Branch { get; set; }
-
-        public ChangesetsViewModel(IApplicationService applicationService)
+        public ChangesetsViewModel(
+            IApplicationService applicationService = null,
+            IFeaturesService featuresService = null)
+            : base(applicationService, featuresService)
         {
-            ApplicationService = applicationService;
         }
 
-		protected override GitHubRequest<List<CommitModel>> GetRequest()
+        public void Init(NavObject navObject)
         {
-            return ApplicationService.Client.Users[RepositoryOwner].Repositories[RepositoryName].Commits.GetAll(Branch ?? "master");
+            base.Init(navObject);
+            Branch = navObject.Branch;
+        }
+
+        protected override GitHubRequest<List<CommitModel>> GetRequest()
+        {
+            return this.GetApplication().Client.Users[Username].Repositories[Repository].Commits.GetAll(Branch);
+        }
+
+        public new class NavObject : CommitsViewModel.NavObject
+        {
+            public string Branch { get; set; }
         }
     }
 }

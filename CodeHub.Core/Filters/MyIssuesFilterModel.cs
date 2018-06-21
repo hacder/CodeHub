@@ -1,18 +1,19 @@
 using System;
+using System.ComponentModel;
 
 namespace CodeHub.Core.Filters
 {
-	public class MyIssuesFilterModel : BaseIssuesFilterModel
+    public class MyIssuesFilterModel : BaseIssuesFilterModel<MyIssuesFilterModel>
     {
-		public string Labels { get; set; }
+        public string Labels { get; set; }
 
-		public Filter FilterType { get; set; }
+        public Filter FilterType { get; set; }
 
         public bool Open { get; set; }
 
-		public DateTime? Since { get; set; }
+        public DateTime? Since { get; set; }
 
-		public MyIssuesFilterModel()
+        public MyIssuesFilterModel()
         {
             Open = true;
             FilterType = Filter.All;
@@ -34,9 +35,9 @@ namespace CodeHub.Core.Filters
             return new MyIssuesFilterModel { FilterType = Filter.All, Open = false };
         }
 
-        public MyIssuesFilterModel Clone()
+        public override MyIssuesFilterModel Clone()
         {
-            return (MyIssuesFilterModel)MemberwiseClone();
+            return (MyIssuesFilterModel)this.MemberwiseClone();
         }
 
         public override bool Equals(object obj)
@@ -59,18 +60,18 @@ namespace CodeHub.Core.Filters
             }
         }
         
-		public enum Filter
-		{
-            [EnumDescription("Assigned To You")]
-			Assigned,
-            [EnumDescription("Created By You")]
-			Created,
-            [EnumDescription("Mentioning You")]
-			Mentioned,
-            [EnumDescription("Issues Subscribed To")]
-			Subscribed,
-			All
-		}
+        public enum Filter
+        {
+            [Description("Assigned To You")]
+            Assigned,
+            [Description("Created By You")]
+            Created,
+            [Description("Mentioning You")]
+            Mentioned,
+            [Description("Issues Subscribed To")]
+            Subscribed,
+            All
+        }
     }
 }
 

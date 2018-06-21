@@ -1,67 +1,64 @@
 using System;
-using System.Linq;
+using MvvmCross.Core.ViewModels;
 using System.Threading.Tasks;
+using CodeHub.Core.Messages;
+using System.Linq;
 using CodeHub.Core.Services;
-using CodeHub.Core.ViewModels.App;
-using GitHubSharp.Models;
-using ReactiveUI;
-using System.Reactive.Subjects;
 
 namespace CodeHub.Core.ViewModels.Issues
 {
-	public class IssueAddViewModel : IssueModifyViewModel
-	{
-        private readonly Subject<IssueModel> _createdIssueSubject = new Subject<IssueModel>();
-	    private readonly IApplicationService _applicationService;
+    public class IssueAddViewModel : IssueModifyViewModel
+    {
+        private readonly IMessageService _messageService;
 
-        public IObservable<IssueModel> CreatedIssue
+        public IssueAddViewModel(IMessageService messageService)
+            : base(messageService)
         {
-            get { return _createdIssueSubject; }
+            _messageService = messageService;
         }
 
-        public IReactiveCommand<object> GoToDescriptionCommand { get; private set; }
-
-        public IssueAddViewModel(IApplicationService applicationService)
+        protected override async Task Save()
         {
-            _applicationService = applicationService;
+            if (string.IsNullOrEmpty(IssueTitle))
+            {
+                DisplayAlert("Unable to save the issue: you must provide a title!");
+                return;
+            }
 
-            GoToDescriptionCommand = ReactiveCommand.Create();
-//            GoToDescriptionCommand.Subscribe(_ =>
-//            {
-//                var vm = CreateViewModel<MarkdownComposerViewModel>();
-//                vm.Text = Content;
-//                vm.SaveCommand.Subscribe(__ =>
-//                {
-//                    Content = vm.Text;
-//                    vm.DismissCommand.ExecuteIfCan();
-//                });
-//                ShowViewModel(vm);
-//            });
+            try
+            {
+                string assignedTo = AssignedTo == null ? null : AssignedTo.Login;
+                int? milestone = null;
+                if (Milestone != null) 
+                    milestone = Milestone.Number;
+                string[] labels = Labels.Items.Select(x => x.Name).ToArray();
+                var content = Content ?? string.Empty;
+
+                IsSaving = true;
+                var data = await this.GetApplication().Client.ExecuteAsync(this.GetApplication().Client.Users[Username].Repositories[Repository].Issues.Create(IssueTitle, content, assignedTo, milestone, labels));
+                _messageService.Send(new IssueAddMessage(data.Data));
+                ChangePresentation(new MvxClosePresentationHint(this));
+            }
+            catch
+            {
+                DisplayAlert("Unable to save new issue! Please try again.");
+            }
+            finally
+            {
+                IsSaving = false;
+            }
         }
 
-		protected override async Task Save()
-		{
-            if (string.IsNullOrEmpty(Title))
-                throw new Exception("Unable to save the issue: you must provide a title!");
+        public void Init(NavObject navObject)
+        {
+            base.Init(navObject.Username, navObject.Repository);
+        }
 
-			try
-			{
-				var assignedTo = AssignedTo == null ? null : AssignedTo.Login;
-				int? milestone = null;
-				if (Milestone != null) 
-					milestone = Milestone.Number;
-				var labels = Labels.Select(x => x.Name).ToArray();
-				var content = Content ?? string.Empty;
-
-                var data = await _applicationService.Client.ExecuteAsync(_applicationService.Client.Users[RepositoryOwner].Repositories[RepositoryName].Issues.Create(Title, content, assignedTo, milestone, labels));
-                _createdIssueSubject.OnNext(data.Data);
-                DismissCommand.ExecuteIfCan();
-			}
-			catch (Exception e)
-			{
-                throw new Exception("Unable to save new issue! Please try again.", e);
-			}
-		}
+        public class NavObject
+        {
+            public string Username { get; set; }
+            public string Repository { get; set; }
+        }
     }
 }
 
